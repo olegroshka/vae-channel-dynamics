@@ -1,5 +1,5 @@
 # Base configuration - common settings
-project_name: "vae-channel-dynamics"
+project_name: "vae-dyn"
 run_name: "baseline" # Overridden by specific experiment configs
 output_dir: "./results" # Base directory for checkpoints and logs
 
@@ -39,6 +39,7 @@ training:
 logging:
   log_interval: 50 # Log metrics every N global steps
   report_to: "wandb" # "tensorboard", "wandb", "all", "none"
+  entity: "vae-dyn" # W&B entity (username or team name) here
 saving:
   save_interval: 500 # Save checkpoint every N global steps
   checkpoint_dir_prefix: "chkpt" # Prefix for checkpoint subdirectories

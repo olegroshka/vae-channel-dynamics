@@ -5,6 +5,7 @@ import argparse
 import logging
 import math
 import warnings
+import time # <<< Import time for sleep
 
 import torch
 import torch.nn.functional as F
@@ -54,7 +55,8 @@ def main():
     run_name = config.get("run_name", "vae_channel_dynamics_run")
     output_dir = os.path.join(config.get("output_dir", "./results"), run_name)
     logging_dir = os.path.join(output_dir, "logs")
-    report_to = config.get("logging", {}).get("report_to", "tensorboard")
+    logging_config = config.get("logging", {}) # Get logging sub-config
+    report_to = logging_config.get("report_to", "tensorboard")
 
     accelerator_project_config = ProjectConfiguration(project_dir=output_dir, logging_dir=logging_dir)
 
@@ -109,18 +111,24 @@ def main():
 
 
     # --- Wandb Initialization (if used) ---
-    if accelerator.is_main_process and report_to in ["wandb", "all"]:
+    # Extract wandb entity from config
+    wandb_entity = logging_config.get("entity", None) # Get entity, default to None
+    use_wandb = accelerator.is_main_process and report_to in ["wandb", "all"] # Flag if wandb is active
+
+    if use_wandb:
         try:
             wandb.init(
                 project=config.get("project_name", "vae-channel-dynamics"),
                 name=run_name,
                 config=config,
                 dir=output_dir, # Store wandb files within the run's output dir
+                entity=wandb_entity, # <<< W&B entity (team name or username)
                 # mode="disabled" # Uncomment to disable wandb locally
             )
-            logger.info("Weights & Biases initialized.")
+            logger.info(f"Weights & Biases initialized (Entity: {wandb_entity or 'default'}).")
         except Exception as e:
             logger.error(f"Failed to initialize wandb: {e}. Continuing without wandb.")
+            use_wandb = False # Disable wandb if init fails
             # Optionally switch accelerator's log_with if wandb fails
             # Note: accelerator logging might still attempt wandb if config not updated
             # Best practice is often to set report_to="tensorboard" in config if wandb fails/isn't desired
@@ -230,7 +238,7 @@ def main():
         kl_weight = 1e-6
 
     max_grad_norm = training_config.get("max_grad_norm", 1.0)
-    log_interval = config.get("logging", {}).get("log_interval", 50)
+    log_interval = logging_config.get("log_interval", 10) # Use logging_config
     save_interval = config.get("saving", {}).get("save_interval", 500)
     checkpoint_dir_prefix = config.get("saving", {}).get("checkpoint_dir_prefix", "chkpt")
 
@@ -333,15 +341,24 @@ def main():
                             "reconstruction_loss": avg_step_rec_loss,
                             "kl_loss": avg_step_kl_loss,
                             "epoch": epoch,
-                            "step": global_step,
+                            "step": global_step, # Log using global_step
                         }
-                        # Add metrics from tracking/classification if available
-                        # if tracked_data: logs.update(tracked_data) # Needs formatting
+
+                        # <<< Add this debug log >>>
+                        logger.info(f"Logging metrics at step {global_step}: {logs}")
+
                         progress_bar.set_postfix(**{k: f"{v:.4e}" if isinstance(v, float) else v for k, v in logs.items()})
                         try:
+                            # *** Log using accelerator.log (for tensorboard etc.) ***
                             accelerator.log(logs, step=global_step)
+
+                            # *** Explicitly log to wandb if enabled ***
+                            if use_wandb and wandb.run is not None:
+                                wandb.log(logs, step=global_step)
+                                logger.info(f"Explicitly logged metrics to wandb at step {global_step}")
+
                         except Exception as log_e:
-                             logger.error(f"Error during accelerator.log: {log_e}")
+                             logger.error(f"Error during logging: {log_e}")
 
 
                         # Reset accumulators for next logging interval
@@ -381,6 +398,12 @@ def main():
     accelerator.wait_for_everyone()
     logger.info("Training finished.")
 
+    # --- Add a small delay before finishing wandb ---
+    if use_wandb:
+        logger.info("Pausing for 5 seconds before finishing wandb run...")
+        time.sleep(5)
+
+
     # --- Save Final Model ---
     if accelerator.is_main_process:
         final_model_save_path = os.path.join(output_dir, "final_model")
@@ -395,7 +418,7 @@ def main():
             logger.error(f"Error saving final model/state: {final_save_e}")
 
         # --- End Wandb Run ---
-        if report_to in ["wandb", "all"] and wandb.run is not None:
+        if use_wandb and wandb.run is not None:
             try:
                  wandb.finish()
                  logger.info("Weights & Biases run finished.")
