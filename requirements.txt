@@ -1,0 +1,22 @@
+# Core ML/DL Libraries
+torch
+torchvision
+torchaudio
+
+# Hugging Face Ecosystem
+diffusers
+accelerate
+datasets
+transformers # Often needed by diffusers/datasets
+
+# Experiment Tracking & Logging
+wandb
+tensorboard # accelerate uses it by default if wandb not specified
+
+# Utilities
+tqdm
+PyYAML # For config files
+Pillow # For image handling
+
+# Optional: For distributed training features sometimes checked by accelerate
+# deepspeed

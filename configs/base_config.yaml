@@ -1,0 +1,64 @@
+# Base configuration - common settings
+project_name: "vae-channel-dynamics"
+run_name: "baseline" # Overridden by specific experiment configs
+output_dir: "./results" # Base directory for checkpoints and logs
+
+# Seed for reproducibility
+seed: 42
+
+# Model parameters
+model:
+  pretrained_vae_name: "stabilityai/sdxl-vae"
+  # Add any model-specific config here if needed later
+
+# Data parameters
+data:
+  dataset_name: "lambdalabs/pokemon-blip-captions"
+  image_column: "image"
+  resolution: 256
+  max_samples: null # Set to an integer to use a subset, null for full dataset
+  batch_size: 4 # Per device
+  num_workers: 4
+
+# Training parameters
+training:
+  num_train_epochs: 10
+  learning_rate: 1e-5
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_weight_decay: 1e-2
+  adam_epsilon: 1e-08
+  lr_scheduler_type: "linear" # "linear", "cosine", "constant", etc.
+  lr_warmup_steps: 100
+  gradient_accumulation_steps: 1
+  mixed_precision: "fp16" # "no", "fp16", "bf16"
+  max_grad_norm: 1.0 # Max gradient norm for clipping
+  kl_weight: 1e-6 # Weight for the KL divergence loss term
+
+# Logging and Saving
+logging:
+  log_interval: 50 # Log metrics every N global steps
+  report_to: "wandb" # "tensorboard", "wandb", "all", "none"
+saving:
+  save_interval: 500 # Save checkpoint every N global steps
+  checkpoint_dir_prefix: "chkpt" # Prefix for checkpoint subdirectories
+
+# Tracking parameters (Placeholders - define specific params later)
+tracking:
+  enabled: false
+  target_layers: [] # e.g., ["decoder.conv_out", "encoder.conv_in"]
+  track_interval: 100 # Track every N global steps
+
+# Classification parameters (Placeholders)
+classification:
+  enabled: false
+  method: "threshold" # e.g., "threshold", "info_geom"
+  threshold: 0.01 # Example param
+
+# Intervention parameters (Placeholders)
+intervention:
+  enabled: false
+  strategy: "gentle_nudge" # e.g., "gentle_nudge", "reset_scale"
+  nudge_factor: 1.1 # Example param
+  intervention_interval: 200 # Intervene every N global steps
+

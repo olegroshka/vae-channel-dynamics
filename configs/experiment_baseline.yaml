@@ -1,0 +1,15 @@
+# Inherit from base config
+defaults:
+  - base_config
+
+# Override specific settings for this baseline experiment
+run_name: "sdxl_vae_baseline_cifar10_dev" # Changed from pokemon_256
+
+# Ensure tracking/intervention are disabled for baseline
+tracking:
+  enabled: false
+classification:
+  enabled: false
+intervention:
+  enabled: false
+

@@ -1,0 +1,37 @@
+# Inherit from base config
+defaults:
+  - base_config
+
+# Override specific settings for this CIFAR-10 test run
+run_name: "sdxl_vae_cifar10_test_run"
+
+# Data settings for CIFAR-10 test
+data:
+  dataset_name: "uoft-cs/cifar10" # Official HF ID for CIFAR-10
+  image_column: "img"            # Correct image column for CIFAR-10
+  resolution: 64                 # Use smaller resolution for faster dev run
+  max_samples: 100               # Use only 100 samples for training
+  batch_size: 8                  # Can use slightly larger BS for smaller images
+
+# Training settings for a quick test
+training:
+  num_train_epochs: 1            # Train for only 1 epoch
+  learning_rate: 5e-5            # Might need slight adjustment for different data/res
+  gradient_accumulation_steps: 1
+  mixed_precision: "no"          # Use 'no' for CPU or if fp16 causes issues on small runs
+
+# Logging and Saving for quick test
+logging:
+  log_interval: 10               # Log more frequently
+  report_to: "tensorboard"       # Use tensorboard for local test (or 'wandb' if preferred)
+saving:
+  save_interval: 50              # Save checkpoint relatively frequently
+
+# Ensure tracking/intervention are disabled for this test
+tracking:
+  enabled: false
+classification:
+  enabled: false
+intervention:
+  enabled: false
+
