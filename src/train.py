@@ -53,6 +53,7 @@ def main():
 
     # --- Accelerator Setup ---
     run_name = config.get("run_name", "vae_channel_dynamics_run")
+    threshold = float(config.get("threshold", 1e-8))
     output_dir = os.path.join(config.get("output_dir", "./results"), run_name)
     logging_dir = os.path.join(output_dir, "logs")
     logging_config = config.get("logging", {}) # Get logging sub-config
@@ -392,6 +393,15 @@ def main():
 
         # --- End of Epoch ---
         logger.info(f"Epoch {epoch} completed.")
+
+        # log percentage of dead neuron on each trainable param
+        for name, param in vae_wrapper.vae.named_parameters():
+            if "weight" in name and param.requires_grad:
+                total_elements = param.numel()
+                small_values = (param.abs() < threshold).sum().item()
+                percentage = (small_values / total_elements) * 100
+                if percentage > 1e-4:
+                    print(f"{name}: {percentage:.4f}% values < {threshold}")
 
 
     # --- End of Training ---
