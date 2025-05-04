@@ -5,6 +5,9 @@ defaults:
 # Override specific settings for this baseline experiment
 run_name: "sdxl_vae_baseline_cifar10_dev" # Changed from pokemon_256
 
+# threshold to consider neuron as "dead"
+threshold: 1e-5
+
 # Ensure tracking/intervention are disabled for baseline
 tracking:
   enabled: false

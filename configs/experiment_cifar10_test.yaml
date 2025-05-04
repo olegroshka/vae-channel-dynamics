@@ -5,6 +5,9 @@ defaults:
 # Override specific settings for this CIFAR-10 test run
 run_name: "sdxl_vae_cifar10_test_run"
 
+# threshold to consider neuron as "dead"
+threshold: 1e-5
+
 # Data settings for CIFAR-10 test
 data:
   dataset_name: "uoft-cs/cifar10" # Official HF ID for CIFAR-10
