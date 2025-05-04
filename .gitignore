@@ -149,3 +149,7 @@ wandb/
 ehthumbs.db
 Thumbs.db
 /set_hf_token.sh
+
+# ide
+*.idea
+pyproject.toml
