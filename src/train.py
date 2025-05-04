@@ -6,6 +6,7 @@ import logging
 import math
 import warnings
 import time # <<< Import time for sleep
+from collections import defaultdict
 
 import torch
 import torch.nn.functional as F
@@ -16,6 +17,10 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from tqdm.auto import tqdm
 import wandb # Import wandb
 import yaml # Import yaml for saving config
+
+# plotting
+import pandas as pd
+import matplotlib.pyplot as plt
 
 # Local imports
 from utils.config_utils import load_config
@@ -32,6 +37,9 @@ logger = get_logger(__name__, log_level="INFO") # Use accelerate logger
 
 # Filter user warnings (e.g., from datasets library)
 warnings.filterwarnings("ignore", category=UserWarning)
+
+# target layers
+target_layer_classes = (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.Linear)
 
 def parse_args():
     """Parses command-line arguments."""
@@ -254,6 +262,7 @@ def main():
         desc="Training Steps"
     )
 
+    percent_history = defaultdict(list)
     for epoch in range(first_epoch, num_train_epochs):
         vae_wrapper.train() # Set model to training mode
         train_loss_accum = 0.0
@@ -397,11 +406,18 @@ def main():
         # log percentage of dead neuron on each trainable param
         for name, param in vae_wrapper.vae.named_parameters():
             if "weight" in name and param.requires_grad:
-                total_elements = param.numel()
-                small_values = (param.abs() < threshold).sum().item()
-                percentage = (small_values / total_elements) * 100
-                if percentage > 1e-4:
-                    print(f"{name}: {percentage:.4f}% values < {threshold}")
+                module_path = ".".join(name.split(".")[:-1])
+                try:
+                    module = dict(vae_wrapper.vae.named_modules())[module_path]
+                    if isinstance(module, target_layer_classes):
+                        total_elements = param.numel()
+                        small_values = (param.abs() < threshold).sum().item()
+                        percentage = (small_values / total_elements) * 100
+                        if percentage > 1e-4:
+                            percent_history[epoch].append({"layer": name, "percentage": percentage})
+                            logger.debug(f"{name}: {percentage:.4f}% values < {threshold}")
+                except KeyError:
+                    continue
 
 
     # --- End of Training ---
@@ -437,6 +453,44 @@ def main():
 
 
     accelerator.end_training()
+
+    # plot percentages tracked
+    plot_percent(percent_history, threshold)
+
+
+def plot_percent(percent_history, threshold):
+    records = []
+    for epoch, entries in percent_history.items():
+        for entry in entries:
+            records.append({
+                "epoch": epoch,
+                "layer": entry["layer"],
+                "percentage": entry["percentage"]
+            })
+
+    df = pd.DataFrame(records)
+
+    top_layers = (
+        df.groupby("layer")["percentage"]
+        .max()
+        .sort_values(ascending=False)
+        .head(10)
+        .index
+    )
+
+    plt.figure(figsize=(12, 6))
+    for layer in top_layers:
+        layer_df = df[df["layer"] == layer].sort_values("epoch")
+        plt.plot(layer_df["epoch"], layer_df["percentage"], label=layer, marker='o')
+
+    plt.xlabel("Epoch")
+    plt.xticks(df["epoch"].unique())
+    plt.ylabel(f"% of weights < {threshold}")
+    plt.title("Percentage of Dead Neurons Over Time (Epochs)")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":

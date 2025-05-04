@@ -17,6 +17,7 @@ tensorboard # accelerate uses it by default if wandb not specified
 tqdm
 PyYAML # For config files
 Pillow # For image handling
+matplotlib
 
 # Optional: For distributed training features sometimes checked by accelerate
 # deepspeed
