@@ -455,10 +455,10 @@ def main():
     accelerator.end_training()
 
     # plot percentages tracked
-    plot_percent(percent_history, threshold)
+    plot_percent(percent_history, threshold, output_dir)
 
 
-def plot_percent(percent_history, threshold):
+def plot_percent(percent_history, threshold, output_dir):
     records = []
     for epoch, entries in percent_history.items():
         for entry in entries:
@@ -490,7 +490,7 @@ def plot_percent(percent_history, threshold):
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f"{output_dir}/percent.jpg")
 
 
 if __name__ == "__main__":
