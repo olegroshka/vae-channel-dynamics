@@ -1,0 +1,48 @@
+# Inherit from base config
+defaults:
+  - base_config
+
+# Override specific settings for this ImageNette baseline run
+run_name: "sdxl_vae_baseline_imagenette_256_15e"
+project_name: "vae-dyn" # Ensure this matches your wandb project
+
+# threshold to consider neuron/weight as "dead" (for potential analysis/classification)
+threshold: 1e-5
+
+# Data settings for ImageNette
+data:
+  dataset_name: "frgfm/imagenette" # Standard ImageNette dataset on Hub
+  dataset_config_name: "320px"     # dataset config name
+  image_column: "image"            # Correct image column for imagenette
+  resolution: 256                  # Higher resolution
+  max_samples: null                # Use the full training split
+  batch_size: 8                    # Adjust based on VRAM (might need 4 for 256px)
+  num_workers: 4                   # Increase workers if I/O is bottleneck
+
+# Training settings for a more realistic run
+training:
+  num_train_epochs: 15           # Train for more epochs
+  learning_rate: 2e-5            # Slightly lower LR might be stabler for fine-tuning
+  gradient_accumulation_steps: 1 # Increase if batch_size needs to be smaller due to memory
+  #mixed_precision: "fp16"        # Use fp16 for speed/memory
+  kl_weight: 1e-6
+  max_grad_norm: 1.0
+  lr_warmup_steps: 250           # Slightly longer warmup for more steps
+
+# Logging and Saving
+logging:
+  log_interval: 100              # Log less frequently for longer runs
+  report_to: "wandb"
+  entity: "vae-dyn"              # Your W&B entity
+saving:
+  save_interval: 1000            # Save less frequently (e.g., every 1000 steps)
+  checkpoint_dir_prefix: "chkpt"
+
+# Ensure tracking/intervention are disabled for baseline
+tracking:
+  enabled: false
+classification:
+  enabled: false
+intervention:
+  enabled: false
+
