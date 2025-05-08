@@ -5,23 +5,17 @@ import argparse
 import logging
 import math
 import warnings
-import time # <<< Import time for sleep
+import time
 from collections import defaultdict
-from typing import Dict, List # <<< Added missing import for type hints
 
 import torch
 import torch.nn.functional as F
-import accelerate
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from tqdm.auto import tqdm
-import wandb # Import wandb
-import yaml # Import yaml for saving config
-
-# plotting
-import pandas as pd
-import matplotlib.pyplot as plt
+import wandb
+import yaml
 
 # Local imports
 from utils.config_utils import load_config
@@ -515,7 +509,6 @@ def main():
         # --- Plot and Save Dead Neuron History ---
         plot_path = os.path.join(output_dir, "dead_neuron_percentage_history.png")
         csv_path = os.path.join(output_dir, "dead_neuron_percentage_history.csv")
-        # <<< Instantiate the plotter and call plot_history >>>
         plotter = DeadNeuronPlotter(threshold=threshold) # Use default top_n=10 or configure via config
         plotter.plot_history(percent_history, plot_path, csv_path)
         plotter.plot_dead_over_epoch(weights_history, output_dir)
