@@ -18,6 +18,7 @@ tqdm
 PyYAML # For config files
 Pillow # For image handling
 matplotlib
+scikit-learn
 
 # Optional: For distributed training features sometimes checked by accelerate
 # deepspeed
