@@ -42,6 +42,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # target layers for dead neuron analysis (based on user code)
 target_layer_classes = (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.Linear)
+target_layer_names = ["decoder.conv_out.weight", "decoder.conv_in.weight"]
 
 def parse_args():
     """Parses command-line arguments."""
@@ -300,6 +301,7 @@ def main():
     )
 
     percent_history = defaultdict(list) # Initialize dead neuron history tracking
+    weights_history = defaultdict(list)
     for epoch in range(first_epoch, num_train_epochs):
         vae_wrapper.train() # Set model to training mode
         train_loss_accum = 0.0
@@ -441,6 +443,8 @@ def main():
             epoch_dead_neuron_stats = {}
             current_model = accelerator.unwrap_model(vae_wrapper) # Get the unwrapped model
             for name, param in current_model.vae.named_parameters():
+                if name in target_layer_names:
+                    weights_history[name].append(param.detach().cpu().numpy())
                 if "weight" in name and param.requires_grad: # Focus on weights
                     module_path = ".".join(name.split(".")[:-1])
                     try:
@@ -510,9 +514,12 @@ def main():
 
         # --- Plot and Save Dead Neuron History ---
         plot_path = os.path.join(output_dir, "dead_neuron_percentage_history.png")
+        csv_path = os.path.join(output_dir, "dead_neuron_percentage_history.csv")
         # <<< Instantiate the plotter and call plot_history >>>
-        plotter = DeadNeuronPlotter() # Use default top_n=10 or configure via config
-        plotter.plot_history(percent_history, threshold, plot_path)
+        plotter = DeadNeuronPlotter(threshold=threshold) # Use default top_n=10 or configure via config
+        plotter.plot_history(percent_history, plot_path, csv_path)
+        plotter.plot_dead_over_epoch(weights_history, output_dir)
+        plotter.plot_heatmap(weights_history, output_dir)
         logger.info(f"Saved dead neuron history plot to {plot_path}")
         # -----------------------------------------
 
@@ -532,9 +539,6 @@ def main():
 
 
     accelerator.end_training()
-
-
-# <<< Removed the plot_percent function definition from here >>>
 
 
 if __name__ == "__main__":
