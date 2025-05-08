@@ -7,7 +7,6 @@ import numpy as np
 
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
 from collections import defaultdict # Keep defaultdict if used internally, though not strictly needed for plotting func sig
 
 logger = logging.getLogger(__name__)
