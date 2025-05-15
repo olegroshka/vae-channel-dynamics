@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # target layers for dead neuron analysis (based on user code)
 target_layer_classes = (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.Linear)
-target_layer_names = ["decoder.conv_out.weight", "decoder.conv_in.weight"]
+target_layer_names = ["encoder.down_blocks.1.resnets.0.conv_shortcut.weight"]
 
 def parse_args():
     """Parses command-line arguments."""
