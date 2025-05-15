@@ -1,5 +1,7 @@
 # src/models/sdxl_vae_wrapper.py
 import logging
+import os
+
 import torch
 import torchvision.transforms as T
 from torchvision.utils import make_grid
@@ -120,15 +122,20 @@ class SDXLVAEWrapper(torch.nn.Module):
         return image
 
     def add_hook(self, path: str):
+        directory = f'{path}/intermediates'
+        os.makedirs(directory, exist_ok=True)
+
         def hook_fn(module, input, output):
             output_tensor = output.detach()
-            for i in range(output_tensor.shape[0]):
+            for i in range(min(output_tensor.shape[0], 10)):
                 out = output_tensor[i].squeeze(0)
                 out.clamp(min=out.min(), max=out.max())
                 out_grid = out.unsqueeze(1)
                 grid_img = make_grid(out_grid, nrow=8, normalize=True, padding=2)
                 output_pil = T.ToPILImage()(grid_img)
-                output_pil.save(f"{path}/intermediates/out_{i}.png")
+                output_pil.save(f"{directory}/out_{i}.png")
+                print(f"Saved to {directory}/out_{i}.png")
+
         self.hook = self.vae.encoder.down_blocks[1].resnets[0].conv_shortcut.register_forward_hook(hook_fn)
 
     def remove_hook(self):
