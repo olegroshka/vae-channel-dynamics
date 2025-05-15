@@ -19,7 +19,7 @@ data:
 
 # Training settings for a quick test
 training:
-  num_train_epochs: 5            # Train for only 5 epoch
+  num_train_epochs: 10           # Train for only 10 epoch
   learning_rate: 5e-5            # Might need slight adjustment for different data/res
   gradient_accumulation_steps: 1
   mixed_precision: "no"          # Use 'no' for CPU or if fp16 causes issues on small runs

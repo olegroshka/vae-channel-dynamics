@@ -5,26 +5,22 @@ import argparse
 import logging
 import math
 import warnings
-import time # <<< Import time for sleep
+import time
 from collections import defaultdict
 
 import torch
 import torch.nn.functional as F
-import accelerate
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from tqdm.auto import tqdm
-import wandb # Import wandb
-import yaml # Import yaml for saving config
-
-# plotting
-import pandas as pd
-import matplotlib.pyplot as plt
+import wandb
+import yaml
 
 # Local imports
 from utils.config_utils import load_config
 from utils.logging_utils import setup_logging
+from utils.plotting_utils import DeadNeuronPlotter # <<< Import the new plotter class
 from data_utils import load_and_preprocess_dataset, create_dataloader
 from models.sdxl_vae_wrapper import SDXLVAEWrapper
 from tracking.monitor import ActivityMonitor
@@ -38,8 +34,9 @@ logger = get_logger(__name__, log_level="INFO") # Use accelerate logger
 # Filter user warnings (e.g., from datasets library)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# target layers
+# target layers for dead neuron analysis (based on user code)
 target_layer_classes = (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.Linear)
+target_layer_names = ["decoder.conv_out.weight", "decoder.conv_in.weight"]
 
 def parse_args():
     """Parses command-line arguments."""
@@ -61,18 +58,27 @@ def main():
 
     # --- Accelerator Setup ---
     run_name = config.get("run_name", "vae_channel_dynamics_run")
-    threshold = float(config.get("threshold", 1e-8))
+    # *** Get threshold from config, ensuring it's float ***
+    try:
+        threshold = float(config.get("threshold", 1e-8))
+    except (ValueError, TypeError):
+        logger.error(f"Invalid threshold format: {config.get('threshold')}. Using default 1e-8.")
+        threshold = 1e-8
+
     output_dir = os.path.join(config.get("output_dir", "./results"), run_name)
     logging_dir = os.path.join(output_dir, "logs")
     logging_config = config.get("logging", {}) # Get logging sub-config
     report_to = logging_config.get("report_to", "tensorboard")
+    mixed_precision_config = config.get("training", {}).get("mixed_precision", "no") # Get mixed precision from config
 
     accelerator_project_config = ProjectConfiguration(project_dir=output_dir, logging_dir=logging_dir)
 
+    # Initialize accelerator *without* wandb initially if we handle it manually
+    log_with_accelerate = None if report_to in ["wandb", "all"] else report_to
     accelerator = Accelerator(
         gradient_accumulation_steps=config.get("training", {}).get("gradient_accumulation_steps", 1),
-        mixed_precision=config.get("training", {}).get("mixed_precision", "no"),
-        log_with=report_to,
+        mixed_precision=mixed_precision_config, # Use the value from config
+        log_with=log_with_accelerate, # Use None if wandb is primary
         project_config=accelerator_project_config,
     )
 
@@ -89,9 +95,11 @@ def main():
         datasets_log.setLevel(logging.WARNING) # Reduce datasets verbosity
         diffusers_log = logging.getLogger("diffusers")
         diffusers_log.setLevel(logging.WARNING) # Reduce diffusers verbosity
+        # Suppress matplotlib font warnings if desired
+        mpl_logger = logging.getLogger('matplotlib.font_manager')
+        mpl_logger.setLevel(logging.WARNING)
     else:
         # Only log errors on non-main processes
-        # Use basicConfig level=logging.ERROR ? No, let accelerate handle process logging levels
         pass
 
 
@@ -122,7 +130,8 @@ def main():
     # --- Wandb Initialization (if used) ---
     # Extract wandb entity from config
     wandb_entity = logging_config.get("entity", None) # Get entity, default to None
-    use_wandb = accelerator.is_main_process and report_to in ["wandb", "all"] # Flag if wandb is active
+    # Determine if wandb should be used based on config and process rank
+    use_wandb = accelerator.is_main_process and report_to in ["wandb", "all"]
 
     if use_wandb:
         try:
@@ -131,26 +140,34 @@ def main():
                 name=run_name,
                 config=config,
                 dir=output_dir, # Store wandb files within the run's output dir
-                entity=wandb_entity, # <<< W&B entity (team name or username)
+                entity=wandb_entity, # <<< Pass the entity (team name or username)
                 # mode="disabled" # Uncomment to disable wandb locally
             )
             logger.info(f"Weights & Biases initialized (Entity: {wandb_entity or 'default'}).")
         except Exception as e:
             logger.error(f"Failed to initialize wandb: {e}. Continuing without wandb.")
             use_wandb = False # Disable wandb if init fails
-            # Optionally switch accelerator's log_with if wandb fails
-            # Note: accelerator logging might still attempt wandb if config not updated
-            # Best practice is often to set report_to="tensorboard" in config if wandb fails/isn't desired
-            pass
+            # If wandb failed, maybe default accelerator logging to tensorboard?
+            if accelerator.log_with is None:
+                 accelerator.log_with = "tensorboard"
+                 logger.warning("Falling back to accelerator logging with tensorboard.")
 
 
     accelerator.wait_for_everyone()
 
     # --- Load Model ---
     model_config = config.get("model", {})
+    # *** FIX: Map config string to correct torch dtype ***
+    model_torch_dtype = None
+    if mixed_precision_config == "fp16":
+        model_torch_dtype = torch.float16
+    elif mixed_precision_config == "bf16":
+        model_torch_dtype = torch.bfloat16
+    # If 'no' or other value, model_torch_dtype remains None (defaults to float32)
+
     vae_wrapper = SDXLVAEWrapper(
         pretrained_model_name_or_path=model_config.get("pretrained_vae_name", "stabilityai/sdxl-vae"),
-        torch_dtype=getattr(torch, accelerator.mixed_precision) if accelerator.mixed_precision != "no" else None
+        torch_dtype=model_torch_dtype # Pass the mapped dtype
     )
     # VAE is often trained/fine-tuned in full precision for stability, even if rest uses mixed
     # vae_wrapper.vae.to(accelerator.device) # Keep VAE on device, maybe in fp32?
@@ -161,6 +178,7 @@ def main():
     data_config = config.get("data", {})
     train_dataset = load_and_preprocess_dataset(
         dataset_name=data_config.get("dataset_name"),
+        dataset_config_name=data_config.get("dataset_config_name", None), # <<< Pass dataset config name
         image_column=data_config.get("image_column", "image"),
         resolution=data_config.get("resolution", 256),
         max_samples=data_config.get("max_samples", None),
@@ -181,7 +199,7 @@ def main():
     # *** FIX: Explicitly cast learning rate to float ***
     try:
         learning_rate = float(training_config.get("learning_rate", 1e-5))
-    except ValueError:
+    except (ValueError, TypeError):
         logger.error(f"Invalid learning rate format: {training_config.get('learning_rate')}. Using default 1e-5.")
         learning_rate = 1e-5
 
@@ -194,7 +212,21 @@ def main():
     )
 
     # --- LR Scheduler ---
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / training_config.get("gradient_accumulation_steps", 1))
+    # Calculate num_update_steps_per_epoch carefully if dataset is streaming or length unknown
+    try:
+        num_samples = len(train_dataset) if hasattr(train_dataset, "__len__") else None
+        if num_samples:
+            num_update_steps_per_epoch = math.ceil(num_samples / data_config.get("batch_size", 4) / training_config.get("gradient_accumulation_steps", 1))
+            logger.info(f"Calculated num_update_steps_per_epoch: {num_update_steps_per_epoch}")
+        else:
+             # Estimate or set a large number if dataset length is unknown (streaming)
+             # This might affect LR decay schedule if not set appropriately
+             num_update_steps_per_epoch = 10000 # Example large number, adjust as needed
+             logger.warning(f"Dataset length unknown (streaming?). Estimating num_update_steps_per_epoch as {num_update_steps_per_epoch}. LR decay might be inaccurate.")
+    except TypeError:
+        num_update_steps_per_epoch = 10000 # Fallback if len() not supported
+        logger.warning(f"Could not determine dataset length. Estimating num_update_steps_per_epoch as {num_update_steps_per_epoch}. LR decay might be inaccurate.")
+
     # Ensure num_train_epochs is treated as int
     num_train_epochs = int(training_config.get("num_train_epochs", 1))
     max_train_steps = num_train_epochs * num_update_steps_per_epoch
@@ -242,7 +274,7 @@ def main():
     # Ensure kl_weight is float
     try:
         kl_weight = float(training_config.get("kl_weight", 1e-6))
-    except ValueError:
+    except (ValueError, TypeError):
         logger.error(f"Invalid kl_weight format: {training_config.get('kl_weight')}. Using default 1e-6.")
         kl_weight = 1e-6
 
@@ -262,7 +294,8 @@ def main():
         desc="Training Steps"
     )
 
-    percent_history = defaultdict(list)
+    percent_history = defaultdict(list) # Initialize dead neuron history tracking
+    weights_history = defaultdict(list)
     for epoch in range(first_epoch, num_train_epochs):
         vae_wrapper.train() # Set model to training mode
         train_loss_accum = 0.0
@@ -355,17 +388,17 @@ def main():
                         }
 
                         # <<< Add this debug log >>>
-                        logger.info(f"Logging metrics at step {global_step}: {logs}")
+                        # logger.info(f"Logging metrics at step {global_step}: {logs}") # Keep commented unless debugging logging
 
                         progress_bar.set_postfix(**{k: f"{v:.4e}" if isinstance(v, float) else v for k, v in logs.items()})
                         try:
-                            # *** Log using accelerator.log (for tensorboard etc.) ***
-                            accelerator.log(logs, step=global_step)
-
-                            # *** Explicitly log to wandb if enabled ***
-                            if use_wandb and wandb.run is not None:
-                                wandb.log(logs, step=global_step)
-                                logger.info(f"Explicitly logged metrics to wandb at step {global_step}")
+                            # *** Conditionally log based on use_wandb ***
+                            if use_wandb:
+                                if wandb.run is not None:
+                                    wandb.log(logs, step=global_step)
+                                    # logger.info(f"Explicitly logged metrics to wandb at step {global_step}") # Reduce verbosity
+                            elif accelerator.log_with is not None: # Log with accelerator if not using wandb
+                                accelerator.log(logs, step=global_step)
 
                         except Exception as log_e:
                              logger.error(f"Error during logging: {log_e}")
@@ -396,28 +429,58 @@ def main():
             if global_step >= max_train_steps:
                 break # Exit inner loop
 
-        if global_step >= max_train_steps:
-             logger.info("Reached max_train_steps. Exiting training.")
-             break # Exit outer loop
-
         # --- End of Epoch ---
         logger.info(f"Epoch {epoch} completed.")
 
-        # log percentage of dead neuron on each trainable param
-        for name, param in vae_wrapper.vae.named_parameters():
-            if "weight" in name and param.requires_grad:
-                module_path = ".".join(name.split(".")[:-1])
+        # --- Collect Dead Neuron Stats (at end of epoch) ---
+        if accelerator.is_main_process: # Only main process needs to calculate/store this
+            epoch_dead_neuron_stats = {}
+            current_model = accelerator.unwrap_model(vae_wrapper) # Get the unwrapped model
+            for name, param in current_model.vae.named_parameters():
+                if name in target_layer_names:
+                    weights_history[name].append(param.detach().cpu().numpy())
+                if "weight" in name and param.requires_grad: # Focus on weights
+                    module_path = ".".join(name.split(".")[:-1])
+                    try:
+                        # Check if the module associated with the weight is of a target type
+                        module = current_model.vae.get_submodule(module_path)
+                        if isinstance(module, target_layer_classes):
+                            total_elements = param.numel()
+                            if total_elements > 0: # Avoid division by zero
+                                small_values = (param.abs() < threshold).sum().item()
+                                percentage = (small_values / total_elements) * 100
+                                # Only store if percentage is non-negligible to avoid clutter? Optional.
+                                # if percentage > 1e-4:
+                                percent_history[name].append(percentage) # Store history per layer name
+                                epoch_dead_neuron_stats[f"dead_neurons/{name}_perc"] = percentage # Log current epoch stat
+                                logger.debug(f"Epoch {epoch} - {name}: {percentage:.4f}% values < {threshold}")
+                            else:
+                                logger.debug(f"Epoch {epoch} - {name}: Skipping, 0 elements.")
+
+                    except AttributeError: # Handle cases where get_submodule fails
+                        logger.debug(f"Could not get submodule for {name}, skipping dead neuron check.")
+                        continue
+                    except Exception as e: # Catch other potential errors
+                         logger.error(f"Error checking dead neurons for {name}: {e}")
+
+            # --- Log Dead Neuron Stats to Wandb/Tensorboard ---
+            if epoch_dead_neuron_stats: # Log if any stats were collected
                 try:
-                    module = dict(vae_wrapper.vae.named_modules())[module_path]
-                    if isinstance(module, target_layer_classes):
-                        total_elements = param.numel()
-                        small_values = (param.abs() < threshold).sum().item()
-                        percentage = (small_values / total_elements) * 100
-                        if percentage > 1e-4:
-                            percent_history[epoch].append({"layer": name, "percentage": percentage})
-                            logger.debug(f"{name}: {percentage:.4f}% values < {threshold}")
-                except KeyError:
-                    continue
+                    step_to_log_epoch_stats = global_step # Log epoch stats at the current global step
+                    if use_wandb:
+                        if wandb.run is not None:
+                            wandb.log(epoch_dead_neuron_stats, step=step_to_log_epoch_stats)
+                            logger.info(f"Logged dead neuron stats to wandb for epoch {epoch} at step {step_to_log_epoch_stats}")
+                    elif accelerator.log_with is not None:
+                        accelerator.log(epoch_dead_neuron_stats, step=step_to_log_epoch_stats)
+                        logger.info(f"Logged dead neuron stats via accelerator for epoch {epoch} at step {step_to_log_epoch_stats}")
+                except Exception as log_e:
+                    logger.error(f"Error logging dead neuron stats for epoch {epoch}: {log_e}")
+        # ------------------------------------------------------
+
+        if global_step >= max_train_steps:
+             logger.info("Reached max_train_steps. Exiting training.")
+             break # Exit outer loop
 
 
     # --- End of Training ---
@@ -426,8 +489,8 @@ def main():
 
     # --- Add a small delay before finishing wandb ---
     if use_wandb:
-        logger.info("Pausing for 5 seconds before finishing wandb run...")
-        time.sleep(5)
+        logger.info("Pausing for 10 seconds before finishing wandb run...") # Increased sleep time
+        time.sleep(10)
 
 
     # --- Save Final Model ---
@@ -443,54 +506,32 @@ def main():
         except Exception as final_save_e:
             logger.error(f"Error saving final model/state: {final_save_e}")
 
+        # --- Plot and Save Dead Neuron History ---
+        plot_path = os.path.join(output_dir, "dead_neuron_percentage_history.png")
+        csv_path = os.path.join(output_dir, "dead_neuron_percentage_history.csv")
+        plotter = DeadNeuronPlotter(threshold=threshold) # Use default top_n=10 or configure via config
+        plotter.plot_history(percent_history, plot_path, csv_path)
+        plotter.plot_dead_over_epoch(weights_history, output_dir)
+        plotter.plot_heatmap(weights_history, output_dir)
+        logger.info(f"Saved dead neuron history plot to {plot_path}")
+        # -----------------------------------------
+
         # --- End Wandb Run ---
         if use_wandb and wandb.run is not None:
             try:
+                 # Log the plot as an artifact/image to wandb
+                 if os.path.exists(plot_path): # Check if plot was actually saved
+                     wandb.log({"dead_neuron_plot": wandb.Image(plot_path)})
+                     logger.info("Logged dead neuron plot to wandb.")
+                 else:
+                      logger.warning("Dead neuron plot file not found, cannot log to wandb.")
                  wandb.finish()
                  logger.info("Weights & Biases run finished.")
             except Exception as wandb_e:
-                 logger.error(f"Error finishing wandb run: {wandb_e}")
+                 logger.error(f"Error finishing wandb run or logging plot: {wandb_e}")
 
 
     accelerator.end_training()
-
-    # plot percentages tracked
-    plot_percent(percent_history, threshold, output_dir)
-
-
-def plot_percent(percent_history, threshold, output_dir):
-    records = []
-    for epoch, entries in percent_history.items():
-        for entry in entries:
-            records.append({
-                "epoch": epoch,
-                "layer": entry["layer"],
-                "percentage": entry["percentage"]
-            })
-
-    df = pd.DataFrame(records)
-
-    top_layers = (
-        df.groupby("layer")["percentage"]
-        .max()
-        .sort_values(ascending=False)
-        .head(10)
-        .index
-    )
-
-    plt.figure(figsize=(12, 6))
-    for layer in top_layers:
-        layer_df = df[df["layer"] == layer].sort_values("epoch")
-        plt.plot(layer_df["epoch"], layer_df["percentage"], label=layer, marker='o')
-
-    plt.xlabel("Epoch")
-    plt.xticks(df["epoch"].unique())
-    plt.ylabel(f"% of weights < {threshold}")
-    plt.title("Percentage of Dead Neurons Over Time (Epochs)")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/percent.jpg")
 
 
 if __name__ == "__main__":

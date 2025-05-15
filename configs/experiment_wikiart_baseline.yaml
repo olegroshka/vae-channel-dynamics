@@ -1,0 +1,48 @@
+# Inherit from base config
+defaults:
+  - base_config
+
+# Override specific settings for this WikiArt baseline run
+run_name: "sdxl_vae_baseline_wikiart_256_15e"
+project_name: "vae-dyn" # Ensure this matches your wandb project
+
+# threshold to consider neuron/weight as "dead" (for potential analysis/classification)
+threshold: 1e-5
+
+# Data settings for WikiArt
+data:
+  dataset_name: "jlbaker361/wikiart" # WikiArt dataset on Hub
+  # dataset_config_name: null     # Assuming the default config is desired
+  image_column: "image"           # Standard image column
+  resolution: 256                 # Keep 256 resolution
+  max_samples: null               # Use the full training split (or set a number for testing)
+  batch_size: 8                   # Adjust based on VRAM
+  num_workers: 4
+
+# Training settings - keep similar to imagenette run for comparison
+training:
+  num_train_epochs: 15            # Train for 15 epochs
+  learning_rate: 2e-5             # Keep LR similar
+  gradient_accumulation_steps: 1
+  mixed_precision: "no" #"fp16"         # Use fp16 for speed/memory
+  kl_weight: 1e-6
+  max_grad_norm: 1.0
+  lr_warmup_steps: 250
+
+# Logging and Saving
+logging:
+  log_interval: 100
+  report_to: "wandb"
+  entity: "vae-dyn"
+saving:
+  save_interval: 1000
+  checkpoint_dir_prefix: "chkpt"
+
+# Ensure tracking/intervention are disabled for baseline
+tracking:
+  enabled: false
+classification:
+  enabled: false
+intervention:
+  enabled: false
+
