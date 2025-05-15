@@ -82,7 +82,7 @@ class DeadNeuronPlotter:
             # plt.show()
             self.save_and_close(os.path.join(save_dir, f'dead_weights_3d_{layer}.png'))
 
-    def plot_history(self, percent_history: Dict[str, List[float]], save_path: str, csv_path: str):
+    def plot_history(self, percent_history: Dict[str, List[float]], save_path: str, csv_path: str, xlabel: str = "Step"):
         """
         Plots the percentage of dead neurons over epochs for tracked layers and saves the plot.
 
@@ -141,7 +141,7 @@ class DeadNeuronPlotter:
             layer_data = layer_data.reindex(epochs)
             plt.plot(layer_data.index, layer_data["percentage"], label=layer, marker='.', linestyle='-') # Use dots and lines
 
-        plt.xlabel("Epoch")
+        plt.xlabel(xlabel)
         # Adjust x-tick frequency based on number of epochs
         tick_frequency = max(1, num_epochs // 15 if num_epochs > 15 else 1) # Show ~15 ticks max
         plt.xticks(range(0, num_epochs, tick_frequency))
@@ -152,6 +152,27 @@ class DeadNeuronPlotter:
         plt.grid(True, linestyle='--', alpha=0.6)
         # Adjust layout to make space for legend
         plt.tight_layout(rect=[0, 0, 0.85, 1]) # Adjust right boundary
+        self.save_and_close(save_path)
+
+    def plot_matrix(self, percent_history, save_path, xlabel="Step"):
+        if not percent_history:
+            return
+        layers = list(percent_history.keys())
+        steps = sorted({x for hist in percent_history.values() for x, _ in hist})
+        matrix = np.full((len(layers), len(steps)), np.nan)
+        for li, layer in enumerate(layers):
+            for x, y in percent_history[layer]:
+                si = steps.index(x)
+                matrix[li, si] = y
+        plt.figure(figsize=(12, max(3, 0.3 * len(layers))))
+        plt.imshow(matrix, aspect="auto", cmap="viridis", interpolation="nearest")
+        plt.colorbar(label=f"% |w|<{self.threshold:.1e}")
+        plt.yticks(range(len(layers)), layers, fontsize=8)
+        plt.xticks(np.linspace(0, len(steps) - 1, 10, dtype=int),
+                   [steps[i] for i in np.linspace(0, len(steps) - 1, 10, dtype=int)])
+        plt.xlabel(xlabel)
+        plt.ylabel("Layer")
+        plt.title("Dead-weight heat-map")
         self.save_and_close(save_path)
 
     def save_and_close(self, save_path):

@@ -35,7 +35,7 @@ logger = get_logger(__name__, log_level="INFO") # Use accelerate logger
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # target layers for dead neuron analysis (based on user code)
-target_layer_classes = (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.Linear)
+target_layer_classes = (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.Linear, torch.nn.GroupNorm)
 target_layer_names = ["encoder.down_blocks.1.resnets.0.conv_shortcut.weight"]
 
 def parse_args():
