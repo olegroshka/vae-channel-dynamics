@@ -1,6 +1,8 @@
 # src/models/sdxl_vae_wrapper.py
 import logging
 import torch
+import torchvision.transforms as T
+from torchvision.utils import make_grid
 from diffusers import AutoencoderKL
 from typing import Optional, Union
 
@@ -27,6 +29,7 @@ class SDXLVAEWrapper(torch.nn.Module):
         self.torch_dtype = torch_dtype
         self.vae = self._load_vae()
         self.scaling_factor = self.vae.config.scaling_factor
+        self.hook = None
 
     def _load_vae(self) -> AutoencoderKL:
         """Loads the AutoencoderKL model from Hugging Face Hub or local path."""
@@ -115,6 +118,22 @@ class SDXLVAEWrapper(torch.nn.Module):
         image = self.vae.decode(latents.to(self.vae.device, dtype=self.vae.dtype)).sample
         image = image.clamp(-1, 1) # Clamp output
         return image
+
+    def add_hook(self, path: str):
+        def hook_fn(module, input, output):
+            output_tensor = output.detach()
+            for i in range(output_tensor.shape[0]):
+                out = output_tensor[i].squeeze(0)
+                out.clamp(min=out.min(), max=out.max())
+                out_grid = out.unsqueeze(1)
+                grid_img = make_grid(out_grid, nrow=8, normalize=True, padding=2)
+                output_pil = T.ToPILImage()(grid_img)
+                output_pil.save(f"{path}/intermediates/out_{i}.png")
+        self.hook = self.vae.encoder.down_blocks[1].resnets[0].conv_shortcut.register_forward_hook(hook_fn)
+
+    def remove_hook(self):
+        if self.hook is not None:
+            self.hook.remove()
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

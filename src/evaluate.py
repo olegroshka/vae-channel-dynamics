@@ -142,6 +142,9 @@ def main():
 
     with torch.no_grad():
         for step, batch in enumerate(eval_dataloader):
+            if step == 0:
+                vae_wrapper.add_hook(args.output_dir)
+
             pixel_values = batch.get("pixel_values")
             if pixel_values is None:
                 continue
@@ -191,6 +194,8 @@ def main():
             current_avg_mse = total_mse / num_batches if num_batches > 0 else 0
             current_avg_kl = total_kl / num_batches if num_batches > 0 else 0
             progress_bar.set_postfix(MSE=f"{current_avg_mse:.4e}", KL=f"{current_avg_kl:.4e}")
+
+            vae_wrapper.remove_hook()
 
 
     # --- Final Metrics ---
