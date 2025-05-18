@@ -37,18 +37,49 @@ training:
 
 # Logging and Saving
 logging:
-  log_interval: 50 # Log metrics every N global steps
+  log_interval: 10 # Log metrics every N global steps
   report_to: "wandb" # "tensorboard", "wandb", "all", "none"
   entity: "vae-dyn" # W&B entity (username or team name) here
 saving:
   save_interval: 500 # Save checkpoint every N global steps
   checkpoint_dir_prefix: "chkpt" # Prefix for checkpoint subdirectories
 
+# Threshold for considering a weight "dead" or "near-zero"
+threshold: 1e-8
+
 # Tracking parameters (Placeholders - define specific params later)
 tracking:
-  enabled: false
-  target_layers: [] # e.g., ["decoder.conv_out", "encoder.conv_in"]
-  track_interval: 100 # Track every N global steps
+  enabled: false # Disabled by default in base, enable in specific configs
+  track_interval: 100 # Default interval to process/log tracked data
+  target_layers: [] # Empty by default, specify in dev/experiment configs
+    # Example structure for target_layers (to be filled in dev/experiment configs):
+    # - name: "vae.decoder.up_blocks.0.resnets.0.norm1"
+    #   capture_point: "input" # 'input' or 'output'
+    #   metrics:
+    #     - "mean_abs_activation_per_channel"
+    #     - "full_activation_map" # Careful with memory for many layers/high frequency
+    #     - "mean_activation"
+    #     - "std_activation"
+    # - name: "vae.decoder.up_blocks.0.resnets.0.conv1"
+    #   capture_point: "output"
+    #   metrics:
+    #     - "mean_abs_activation_per_channel"
+
+# --- Logit lens section ---
+logit_lens:
+  enabled: false # Disabled by default, enable in specific experiment configs
+  visualization_interval: 1000 # How often (global steps) to generate visualizations
+  visualization_output_subdir: "logit_lens_visualizations" # Subdirectory in experiment output
+  target_tracked_metrics: []
+    # List of strings, each identifying a 'full_activation_map' to visualize.
+    # Format: "<layer_identifier_from_monitor>.<metric_name_from_monitor>"
+    # Example:
+    #   - "vae.encoder.down_blocks.0.resnets.0.norm1.input.full_activation_map"
+    #   - "vae.decoder.up_blocks.0.resnets.0.norm1.input.full_activation_map"
+  num_channels_to_viz: 4    # Default number of channels to visualize per map
+  num_batch_samples_to_viz: 1 # Default number of batch samples to visualize
+  colormap: 'viridis'         # Default colormap for activation maps
+  run_mini_decoder_projection: false # Whether to run the placeholder mini-decoder
 
 # Classification parameters (Placeholders)
 classification:

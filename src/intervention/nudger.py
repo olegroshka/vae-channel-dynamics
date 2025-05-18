@@ -1,50 +1,74 @@
 # src/intervention/nudger.py
 import logging
 import torch
-from typing import Dict, Any, List
+import torch.nn as nn
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
 class InterventionHandler:
     """
-    Placeholder class for applying interventions ("nudges") to model parameters
-    based on classification results.
+    Applies interventions ("nudges") to model parameters, primarily GroupNorm scales,
+    based on classification results identifying inactive channels.
     """
-    def __init__(self, model: torch.nn.Module, config: Dict[str, Any]):
+
+    def __init__(self, model: nn.Module, config: Dict[str, Any]):
         """
         Initializes the intervention handler.
 
         Args:
-            model: The model whose parameters might be modified.
+            model: The PyTorch model (preferably unwrapped if direct parameter
+                   modification is done) whose parameters might be modified.
             config: Dictionary containing intervention configuration parameters.
+                    Expected keys:
+                    - enabled (bool)
+                    - strategy (str): e.g., "gentle_nudge_groupnorm_scale", "reset_groupnorm_scale"
+                    - nudge_factor (float): Multiplicative factor for gentle nudge.
+                    - nudge_value (float): Additive value for gentle nudge (alternative).
+                    - max_scale_value (float): Cap for nudged scale parameters.
+                    - intervention_interval (int): How often to intervene.
+                    - target_layer_param_map (Dict[str, str]): Optional, if classifier provides
+                                                               abstract layer names and we need to
+                                                               map them to actual param names.
+                                                               For now, assumes classifier gives param names.
         """
-        self.model = model
+        self.model = model  # Should be the unwrapped model for direct param access
         self.config = config
         self.strategy = config.get("strategy", "none")
-        self.nudge_factor = config.get("nudge_factor", 1.1) # Example parameter
-        logger.info(f"InterventionHandler initialized (strategy: {self.strategy})")
+        self.nudge_factor = float(config.get("nudge_factor", 1.1))
+        self.nudge_value_add = float(config.get("nudge_value_add", 0.01))
+        self.max_scale_value = float(config.get("max_scale_value", 2.0))  # Cap to prevent extreme values
 
-    def _get_parameter(self, param_name: str) -> torch.nn.Parameter:
-        """Retrieves a parameter from the model using its name."""
-        # Similar logic to getting a layer, but targets parameters
-        modules = param_name.split('.')
-        param_attr = modules[-1]
-        current_module = self.model
-        for mod_name in modules[:-1]:
-             if hasattr(current_module, mod_name):
-                 current_module = getattr(current_module, mod_name)
-             else:
-                 raise AttributeError(f"Model does not have a module named '{'.'.join(modules[:-1])}'")
+        logger.info(f"InterventionHandler initialized (strategy: {self.strategy}, model type: {type(model)})")
+        if not isinstance(model, nn.Module):
+            logger.warning(
+                f"InterventionHandler received a model of type {type(model)}, expected nn.Module. Parameter access might fail if model is wrapped unexpectedly.")
 
-        if hasattr(current_module, param_attr):
-            param = getattr(current_module, param_attr)
-            if isinstance(param, torch.nn.Parameter):
-                return param
+    def _get_parameter(self, param_name: str) -> Optional[nn.Parameter]:
+        """
+        Retrieves a parameter from the model using its fully qualified name.
+        Assumes self.model is the root model containing the parameter.
+        """
+        try:
+            modules = param_name.split('.')
+            current_object = self.model
+            for mod_name in modules:
+                if hasattr(current_object, mod_name):
+                    current_object = getattr(current_object, mod_name)
+                else:
+                    logger.error(
+                        f"Model does not have attribute '{mod_name}' in path '{param_name}'. Current object type: {type(current_object)}")
+                    return None
+
+            if isinstance(current_object, nn.Parameter):
+                return current_object
             else:
-                 raise TypeError(f"Attribute '{param_attr}' is not a Parameter.")
-        else:
-             raise AttributeError(f"Module '{'.'.join(modules[:-1])}' does not have parameter '{param_attr}'")
-
+                logger.error(f"Attribute '{param_name}' is not a Parameter, but {type(current_object)}.")
+                return None
+        except Exception as e:
+            logger.error(f"Error getting parameter '{param_name}': {e}", exc_info=True)
+            return None
 
     def intervene(self, classification_results: Dict[str, Any], global_step: int):
         """
@@ -52,139 +76,229 @@ class InterventionHandler:
 
         Args:
             classification_results: Output from the RegionClassifier.
-                                   (e.g., {'layer_name': {'inactive_channels': [indices]}})
+                                   Example for GroupNorm scale nudge:
+                                   {
+                                       "vae.decoder.block.0.norm1": { # Key is an identifier for the layer
+                                           "param_name_scale": "vae.decoder.block.0.norm1.weight", # Actual param name
+                                           "inactive_channel_indices": [0, 5, 12]
+                                       }
+                                   }
             global_step: The current training step.
         """
         if not self.config.get("enabled", False):
-            return # Do nothing if disabled
+            return
+        if self.strategy == "none":
+            return
 
         intervention_interval = self.config.get("intervention_interval", 200)
-        if global_step % intervention_interval != 0:
-            return # Only intervene at specified intervals
+        if global_step == 0 or global_step % intervention_interval != 0:  # Avoid intervening at step 0 unless interval is 1
+            if not (intervention_interval == 1 and global_step > 0):  # Allow if interval is 1 (and not step 0)
+                return
 
-        logger.warning(f"InterventionHandler.intervene at step {global_step} (Placeholder).")
-        logger.debug(f"Classification results received: {classification_results}")
-
+        logger.info(
+            f"InterventionHandler attempting intervention at step {global_step} with strategy '{self.strategy}'.")
         if not classification_results:
-             logger.info(f"Step {global_step}: No inactive regions classified, skipping intervention.")
-             return
+            logger.info(f"Step {global_step}: No regions classified by RegionClassifier, skipping intervention.")
+            return
 
-        if self.strategy == "gentle_nudge":
-            # --- Placeholder Nudging Logic ---
-            # Example: Modify GroupNorm scale parameters for inactive channels
-            # Need to map classified layer_name to the actual parameter name
-            # (e.g., map "decoder.block.0.norm1" to "model.vae.decoder.block[0].norm1.weight")
-            # This mapping requires knowledge of the model structure and how layers are named in tracking/classification.
+        num_nudges_applied = 0
 
-            # for layer_name, data in classification_results.items():
-            #     if 'inactive_channels' in data:
-            #         inactive_indices = data['inactive_channels']
-            #         # --- !!! This parameter name mapping is CRUCIAL and model-specific !!! ---
-            #         # Assume layer_name corresponds to a GroupNorm layer for this example
-            #         # We need the '.weight' for the scale parameter (gamma)
-            #         scale_param_name = f"vae.{layer_name}.weight" # Example mapping
-            #         bias_param_name = f"vae.{layer_name}.bias"   # Example mapping for bias (beta)
+        if self.strategy == "gentle_nudge_groupnorm_scale":
+            for layer_key, data in classification_results.items():
+                param_name_scale = data.get("param_name_scale")
+                inactive_indices = data.get("inactive_channel_indices")
 
-            #         try:
-            #             scale_param = self._get_parameter(scale_param_name)
-            #             # bias_param = self._get_parameter(bias_param_name) # Optionally nudge bias too
+                if not param_name_scale or inactive_indices is None:
+                    logger.warning(
+                        f"Missing 'param_name_scale' or 'inactive_channel_indices' for layer_key '{layer_key}'. Skipping.")
+                    continue
 
-            #             with torch.no_grad(): # Modify parameters without tracking gradients
-            #                 for idx in inactive_indices:
-            #                     if 0 <= idx < len(scale_param.data):
-            #                         # Example: Increase scale slightly
-            #                         current_val = scale_param.data[idx]
-            #                         new_val = current_val * self.nudge_factor # Or add a small constant
-            #                         scale_param.data[idx] = new_val
-            #                         # logger.debug(f"Nudged {scale_param_name}[{idx}] from {current_val:.4f} to {new_val:.4f}")
-            #                     else:
-            #                          logger.warning(f"Inactive index {idx} out of bounds for {scale_param_name}")
+                scale_param = self._get_parameter(param_name_scale)
+                if scale_param is None:
+                    logger.warning(
+                        f"Could not retrieve scale parameter '{param_name_scale}' for layer_key '{layer_key}'. Skipping.")
+                    continue
 
-            #             logger.info(f"Applied '{self.strategy}' to {len(inactive_indices)} channels in {layer_name} (mapped to {scale_param_name})")
+                if not isinstance(scale_param.data, torch.Tensor):
+                    logger.warning(f"Parameter data for '{param_name_scale}' is not a tensor. Skipping.")
+                    continue
 
-            #         except (AttributeError, TypeError) as e:
-            #              logger.error(f"Could not find or access parameter for layer {layer_name} (tried {scale_param_name}): {e}")
-            #         except Exception as e:
-            #              logger.error(f"Unexpected error during intervention for {layer_name}: {e}")
-            pass # End placeholder nudge logic
+                with torch.no_grad():
+                    for idx in inactive_indices:
+                        if 0 <= idx < scale_param.data.numel():  # Check bounds (numel for 1D tensor)
+                            original_val = scale_param.data[idx].item()
+                            # Nudge by multiplying, then ensure it's not too large
+                            nudged_val = original_val * self.nudge_factor
+                            # Alternative: nudge by adding
+                            # nudged_val = original_val + self.nudge_value_add
 
-        elif self.strategy == "reset_scale":
-            # --- Placeholder Reset Logic ---
-            logger.warning("Intervention strategy 'reset_scale' not implemented.")
-            pass
-        elif self.strategy != "none":
+                            final_val = min(nudged_val, self.max_scale_value)
+                            # Optional: ensure a minimum positive value if it was zero
+                            # final_val = max(final_val, 1e-6)
+
+                            scale_param.data[idx] = final_val
+                            logger.debug(
+                                f"Nudged {param_name_scale}[{idx}] from {original_val:.4f} to {final_val:.4f} (pre-cap: {nudged_val:.4f})")
+                            num_nudges_applied += 1
+                        else:
+                            logger.warning(
+                                f"Inactive index {idx} out of bounds for {param_name_scale} (size: {scale_param.data.numel()})")
+            if num_nudges_applied > 0:
+                logger.info(f"Applied '{self.strategy}' to {num_nudges_applied} channel scales at step {global_step}.")
+
+        elif self.strategy == "reset_groupnorm_scale":
+            for layer_key, data in classification_results.items():
+                param_name_scale = data.get("param_name_scale")
+                inactive_indices = data.get("inactive_channel_indices")
+
+                if not param_name_scale or inactive_indices is None:
+                    continue
+
+                scale_param = self._get_parameter(param_name_scale)
+                if scale_param is None:
+                    continue
+
+                with torch.no_grad():
+                    for idx in inactive_indices:
+                        if 0 <= idx < scale_param.data.numel():
+                            original_val = scale_param.data[idx].item()
+                            scale_param.data[idx] = 1.0  # Reset to 1.0
+                            logger.debug(f"Reset {param_name_scale}[{idx}] from {original_val:.4f} to 1.0")
+                            num_nudges_applied += 1
+            if num_nudges_applied > 0:
+                logger.info(f"Applied '{self.strategy}' to {num_nudges_applied} channel scales at step {global_step}.")
+        else:
             logger.warning(f"Unknown intervention strategy: {self.strategy}")
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)  # Use DEBUG for more verbose output from nudger
 
-    # Example Usage (requires a dummy model with parameters)
-    class DummyModelWithParams(torch.nn.Module):
+
+    class DummyVAE(nn.Module):
         def __init__(self):
             super().__init__()
-            # Simulate a structure where intervention might occur
-            self.vae = torch.nn.Module() # Dummy container
-            self.vae.decoder = torch.nn.Module()
-            self.vae.decoder.block = torch.nn.ModuleList([
-                 torch.nn.Module() for _ in range(2)
-            ])
-            # Add a GroupNorm layer with learnable affine parameters
-            # GroupNorm(num_groups, num_channels, eps=1e-05, affine=True)
-            self.vae.decoder.block[0].norm1 = torch.nn.GroupNorm(4, 8, affine=True)
-            self.vae.decoder.block[0].conv = torch.nn.Conv2d(8, 8, 3, padding=1)
+            self.encoder = nn.Identity()  # Placeholder
+            self.decoder = nn.Sequential(
+                nn.Conv2d(3, 16, 3, padding=1),
+                nn.GroupNorm(4, 16),  # num_groups, num_channels
+                nn.ReLU(),
+                nn.Conv2d(16, 3, 3, padding=1)
+            )
 
-    model = DummyModelWithParams()
-    print("Model Structure:")
-    print(model)
-    print("\nParameter Names:")
+
+    class DummyModelWithVAE(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.vae = DummyVAE()
+
+
+    # This model structure is what InterventionHandler will see
+    # The parameter names will be like "vae.decoder.1.weight" (for GroupNorm scale)
+    model = DummyModelWithVAE()
+    logger.info("Model Structure:")
+    # print(model) # verbose
+    logger.info("\nParameter Names and Initial GroupNorm Scales:")
+    gn_scale_param_name = None
+    gn_bias_param_name = None
     for name, param in model.named_parameters():
-        print(f"- {name}: {param.shape}")
+        # Find the GroupNorm scale parameter name dynamically
+        if "decoder.1.weight" in name:  # Assuming decoder.1 is the GroupNorm
+            gn_scale_param_name = name
+            logger.info(f"- {name}: {param.shape}, Initial values: {param.data[:5].tolist()}")
+        if "decoder.1.bias" in name:
+            gn_bias_param_name = name
 
+    if gn_scale_param_name is None:
+        logger.error("Could not find GroupNorm scale parameter in dummy model. Test will likely fail.")
+        exit()
 
-    # Example intervention config
-    intervention_config = {
+    intervention_config_gentle = {
         "enabled": True,
-        "strategy": "gentle_nudge",
-        "nudge_factor": 1.05,
-        "intervention_interval": 10
+        "strategy": "gentle_nudge_groupnorm_scale",
+        "nudge_factor": 1.2,
+        "max_scale_value": 1.5,
+        "intervention_interval": 1  # Intervene every step for test
     }
 
-    # Dummy classification results (needs careful mapping to param names)
-    # The key 'decoder.block.0.norm1' should map to 'vae.decoder.block.0.norm1.weight' etc.
-    dummy_classification = {
-        "decoder.block.0.norm1": { # This key needs to be mapped correctly inside intervene()
-            "inactive_channels": [1, 3, 5] # Indices of channels in the GroupNorm layer
+    # Simulate classification results
+    # The key is a general identifier, 'param_name_scale' is the actual parameter path
+    dummy_classification_results = {
+        "decoder_groupnorm_layer_1": {
+            "param_name_scale": gn_scale_param_name,
+            "inactive_channel_indices": [0, 2, 5, 15]  # Indices of channels in the GroupNorm layer
         }
     }
 
-    logger.info("\n--- Initializing Intervention Handler ---")
-    handler = InterventionHandler(model, intervention_config)
+    logger.info("\n--- Initializing Intervention Handler (Gentle Nudge) ---")
+    handler_gentle = InterventionHandler(model, intervention_config_gentle)
 
-    # Get initial param value
-    try:
-        initial_val = handler._get_parameter("vae.decoder.block.0.norm1.weight").data[1].item()
-        print(f"Initial scale param[1]: {initial_val:.4f}")
-    except Exception as e:
-         print(f"Could not get initial param: {e}")
-         initial_val = None
+    initial_scales = {}
+    if gn_scale_param_name:
+        param_to_check = handler_gentle._get_parameter(gn_scale_param_name)
+        if param_to_check is not None:
+            for idx in dummy_classification_results["decoder_groupnorm_layer_1"]["inactive_channel_indices"]:
+                if 0 <= idx < param_to_check.data.numel():
+                    initial_scales[idx] = param_to_check.data[idx].item()
+            logger.info(f"Initial scales for targeted channels of '{gn_scale_param_name}': {initial_scales}")
 
+    logger.info("\n--- Applying Gentle Nudge Intervention (Step 1) ---")
+    handler_gentle.intervene(dummy_classification_results, global_step=1)
 
-    logger.info("\n--- Applying Intervention (Placeholder) ---")
-    handler.intervene(dummy_classification, global_step=10) # Should trigger intervention
+    logger.info("\nScales after gentle nudge:")
+    if gn_scale_param_name:
+        param_to_check = handler_gentle._get_parameter(gn_scale_param_name)
+        if param_to_check is not None:
+            for idx in dummy_classification_results["decoder_groupnorm_layer_1"]["inactive_channel_indices"]:
+                if 0 <= idx < param_to_check.data.numel():
+                    final_val = param_to_check.data[idx].item()
+                    expected_val = min(initial_scales.get(idx, 0) * 1.2, 1.5)
+                    logger.info(f"  Channel {idx}: {final_val:.4f} (Expected approx: {expected_val:.4f})")
+                    assert abs(final_val - expected_val) < 1e-5, f"Nudge for channel {idx} failed!"
 
-    # Check if param value changed (won't change with placeholder logic)
-    try:
-        final_val = handler._get_parameter("vae.decoder.block.0.norm1.weight").data[1].item()
-        print(f"Final scale param[1]: {final_val:.4f}")
-        if initial_val is not None and abs(final_val - initial_val * 1.05) < 1e-6:
-             print("Parameter value changed as expected (if nudge logic were implemented).")
-        elif initial_val is not None:
-             print("Parameter value did NOT change (placeholder logic).")
-    except Exception as e:
-         print(f"Could not get final param: {e}")
+    intervention_config_reset = {
+        "enabled": True,
+        "strategy": "reset_groupnorm_scale",
+        "intervention_interval": 1
+    }
+    logger.info("\n--- Initializing Intervention Handler (Reset Scale) ---")
+    # Re-initialize model to reset scales for this test part
+    model_for_reset = DummyModelWithVAE()
+    if "decoder.1.weight" in dict(model_for_reset.named_parameters()):  # Ensure param exists
+        gn_scale_param_for_reset = "vae.decoder.1.weight"  # Assuming this is the name
+        # Set some scales to zero to test reset
+        with torch.no_grad():
+            model_for_reset.vae.decoder[1].weight.data[0] = 0.0
+            model_for_reset.vae.decoder[1].weight.data[2] = 0.1
+    else:
+        logger.error("GroupNorm scale param not found in new model_for_reset. Skipping reset test.")
+        gn_scale_param_for_reset = None
 
+    handler_reset = InterventionHandler(model_for_reset, intervention_config_reset)
+    dummy_classification_reset = {
+        "decoder_groupnorm_layer_1": {
+            "param_name_scale": gn_scale_param_for_reset,
+            "inactive_channel_indices": [0, 2]
+        }
+    }
 
-    logger.info("\n--- Applying Intervention (Off Interval) ---")
-    handler.intervene(dummy_classification, global_step=15) # Should not trigger
+    logger.info("\n--- Applying Reset Scale Intervention (Step 1) ---")
+    if gn_scale_param_for_reset:
+        handler_reset.intervene(dummy_classification_reset, global_step=1)
 
+        logger.info("\nScales after reset:")
+        param_to_check_reset = handler_reset._get_parameter(gn_scale_param_for_reset)
+        if param_to_check_reset is not None:
+            for idx in dummy_classification_reset["decoder_groupnorm_layer_1"]["inactive_channel_indices"]:
+                if 0 <= idx < param_to_check_reset.data.numel():
+                    final_val = param_to_check_reset.data[idx].item()
+                    logger.info(f"  Channel {idx}: {final_val:.4f} (Expected: 1.0)")
+                    assert abs(final_val - 1.0) < 1e-5, f"Reset for channel {idx} failed!"
+    else:
+        logger.info("Skipped reset scale test as GroupNorm parameter was not found.")
+
+    logger.info("\n--- Test: Intervention on non-interval step ---")
+    intervention_config_gentle["intervention_interval"] = 10
+    handler_gentle_interval = InterventionHandler(model, intervention_config_gentle)  # Use original model
+    handler_gentle_interval.intervene(dummy_classification_results, global_step=5)  # Should not intervene
+    # (No easy assert here without checking logs, but logger should indicate skipping)

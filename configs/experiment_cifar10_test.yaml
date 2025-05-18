@@ -35,11 +35,121 @@ saving:
   save_interval: 50              # Save checkpoint relatively frequently
   checkpoint_dir_prefix: "chkpt" # Inherited, ensure present
 
-# Ensure tracking/intervention are disabled for this test
+# tracking/intervention are disabled for this test
+#tracking:
+#  enabled: true
+#  track_interval: 10 # A reasonable interval for experiments
+#  target_layers:
+#    # Encoder Layers (example: first, middle, last down blocks)
+#    - name: "vae.encoder.conv_in"
+#      capture_point: "output"
+#      metrics: ["mean_abs_activation_per_channel", "std_activation"]
+#    - name: "vae.encoder.down_blocks.0.resnets.0.norm1"
+#      capture_point: "input"
+#      metrics: ["mean_abs_activation_per_channel", "full_activation_map"] # Monitor one pre-norm closely
+#    - name: "vae.encoder.down_blocks.0.resnets.0.norm1"
+#      capture_point: "output"
+#      metrics: ["mean_abs_activation_per_channel"]
+#    - name: "vae.encoder.down_blocks.1.resnets.1.norm2" # Example mid-encoder layer
+#      capture_point: "input"
+#      metrics: ["mean_abs_activation_per_channel"]
+#    - name: "vae.encoder.down_blocks.1.resnets.1.norm2"
+#      capture_point: "output"
+#      metrics: ["mean_abs_activation_per_channel"]
+#    - name: "vae.encoder.conv_norm_out" # Before projecting to latent space
+#      capture_point: "output" # Output of the norm for the conv before latent projection
+#      metrics: ["mean_abs_activation_per_channel"]
+#    - name: "vae.encoder.conv_out" # After projecting to latent space (parameters of DiagonalGaussianDistribution)
+#      capture_point: "output" # This is actually the DiagonalGaussianDistribution object, hook might need adjustment or target its parameters
+#      metrics: ["mean_abs_activation_per_channel"] # Or custom metric for distribution params
+#
+#    # Decoder Layers (example: first, middle, last up blocks)
+#    - name: "vae.decoder.conv_in"
+#      capture_point: "output"
+#      metrics: ["mean_abs_activation_per_channel", "std_activation"]
+#    - name: "vae.decoder.up_blocks.0.resnets.0.norm1"
+#      capture_point: "input"
+#      metrics: ["mean_abs_activation_per_channel", "full_activation_map"] # Monitor one pre-norm closely
+#    - name: "vae.decoder.up_blocks.0.resnets.0.norm1"
+#      capture_point: "output"
+#      metrics: ["mean_abs_activation_per_channel"]
+#    - name: "vae.decoder.up_blocks.1.resnets.1.norm2" # Example mid-decoder layer
+#      capture_point: "input"
+#      metrics: ["mean_abs_activation_per_channel"]
+#    - name: "vae.decoder.up_blocks.1.resnets.1.norm2"
+#      capture_point: "output"
+#      metrics: ["mean_abs_activation_per_channel"]
+#    - name: "vae.decoder.conv_norm_out"
+#      capture_point: "output"
+#      metrics: ["mean_abs_activation_per_channel"]
+#    - name: "vae.decoder.conv_out"
+#      capture_point: "output" # Final image output
+#      metrics: ["mean_abs_activation_per_channel", "mean_activation", "std_activation"]
 tracking:
-  enabled: false
-classification:
-  enabled: false
-intervention:
-  enabled: false
+  enabled: true
+  track_interval: 10 # ActivityMonitor processes data every 10 steps
+  target_layers:
+    - name: "vae.encoder.down_blocks.0.resnets.0.norm1" # A GroupNorm layer
+      capture_point: "output" # Classifier needs output activations of the norm layer
+      metrics:
+        - "mean_abs_activation_per_channel" # Metric for the classifier
+        - "full_activation_map" # For LogitLens (optional here)
+    - name: "vae.decoder.up_blocks.0.resnets.0.norm1" # An example decoder GroupNorm layer
+      capture_point: "output"
+      metrics:
+        - "mean_abs_activation_per_channel"
+    - name: "vae.decoder.up_blocks.1.resnets.0.norm1" # Another GroupNorm - ensure this is tracked if classified
+      capture_point: "output"
+      metrics:
+        - "mean_abs_activation_per_channel"
+    # Add other layers if you want to monitor them, but ensure the ones
+    # targeted by the classifier have 'mean_abs_activation_per_channel' on their 'output'.
 
+
+# --- Logit Lens Configuration for DEV ---
+logit_lens:
+  enabled: true
+  visualization_interval: 20 # Generate visualizations fairly often for testing (e.g., every 20 steps)
+  target_tracked_metrics:
+    # These MUST match what ActivityMonitor stores.
+    # It's layer_identifier (from monitor) + "." + metric_name (which should be 'full_activation_map')
+    - "vae.encoder.down_blocks.0.resnets.0.norm1.input.full_activation_map"
+    - "vae.decoder.up_blocks.2.resnets.2.norm2.input.full_activation_map"
+  num_channels_to_viz: 2
+  num_batch_samples_to_viz: 1
+  colormap: 'gray'
+  run_mini_decoder_projection: true # Test this as well
+
+
+classification:
+  enabled: true
+  method: "threshold_groupnorm_activity"
+  threshold: 0.01 # <<< Adjust this threshold based on typical activation scales
+  target_metric_key: "mean_abs_activation_per_channel"
+  # Optional: Specify which monitor outputs to classify.
+  # If empty, it will try to classify all applicable layers from monitor's data.
+  # These are layer_identifiers from ActivityMonitor (e.g., "module.name.output")
+  layers_to_classify:
+    - "vae.encoder.down_blocks.0.resnets.0.norm1.output"
+    - "vae.decoder.up_blocks.1.resnets.0.norm1.output"
+
+
+intervention:
+  enabled: true
+  strategy: "gentle_nudge_groupnorm_scale" # "gentle_nudge_groupnorm_scale" or "reset_groupnorm_scale"
+  nudge_factor: 1.05  # Multiplicative factor for gentle nudge
+  # nudge_value_add: 0.01 # Alternative: additive value for gentle nudge
+  max_scale_value: 1.5  # Cap for nudged GroupNorm scales
+  intervention_interval: 20 # How often (global steps) to apply interventions.
+                            # Make sure this triggers a few times in your test run.
+                            # e.g., if log_interval is 10, this will intervene at step 20, 40, etc.
+  # For testing purposes, train.py can read these to create dummy classification results
+  # This allows testing InterventionHandler without a fully functional RegionClassifier.
+  dummy_classification_targets: []
+    # Example:
+    # - layer_key: "decoder_block0_norm1" # An arbitrary key for these targets
+    #   param_name_scale: "vae.decoder.up_blocks.0.resnets.0.norm1.weight" # Actual param name of GN scale
+    #   inactive_channel_indices: [0, 1, 2] # Indices to nudge in this GN layer
+    # - layer_key: "encoder_block1_norm2"
+    #   param_name_scale: "vae.encoder.down_blocks.1.resnets.1.norm2.weight"
+    #   inactive_channel_indices: [3, 4]
