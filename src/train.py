@@ -6,7 +6,6 @@ import logging
 import math
 import warnings
 import time
-from collections import defaultdict
 
 import torch
 import torch.nn.functional as F
@@ -25,6 +24,7 @@ from utils.plotting_utils import DeadNeuronPlotter
 from data_utils import load_and_preprocess_dataset, create_dataloader
 from models.sdxl_vae_wrapper import SDXLVAEWrapper
 from tracking.monitor import ActivityMonitor
+from tracking.deadneuron import DeadNeuronTracker
 from classification.classifier import RegionClassifier
 from intervention.nudger import InterventionHandler  # Ensure this is the updated nudger
 from analysis.logit_lens import VAELogitLens
@@ -204,6 +204,8 @@ def main():
     # Initialize components that might need the model
     unwrapped_model = accelerator.unwrap_model(prepared_vae_wrapper)
 
+    dead_neuron_tracker = DeadNeuronTracker(threshold, target_layer_classes, target_layer_names_for_dead_neuron_perc)
+
     monitor = ActivityMonitor(prepared_vae_wrapper, config.get("tracking", {}))
     classifier_config = config.get("classification", {})
     classifier = RegionClassifier(classifier_config)  # Pass its own config section
@@ -261,9 +263,6 @@ def main():
         disable=not accelerator.is_local_main_process,
         desc="Training Steps"
     )
-
-    percent_history = defaultdict(list)
-    weights_history = defaultdict(list)
 
     for epoch in range(first_epoch, num_train_epochs):
         prepared_vae_wrapper.train()
@@ -446,6 +445,10 @@ def main():
                                 logger.info(f"Saved checkpoint state to {chkpt_save_dir}")
                             except Exception as save_e:
                                 logger.error(f"Error saving checkpoint state: {save_e}")
+
+                    if global_step % track_interval == 0:
+                        dead_neuron_tracker.track_dead_neurons(accelerator.unwrap_model(vae_wrapper))
+
             if global_step >= max_train_steps: break
         logger.info(f"Epoch {epoch} completed.")
 
@@ -485,6 +488,12 @@ def main():
                 logger.error(f"Failed to save activation stats CSV or log to W&B: {csv_e}")
         else:
             logger.info("No activation stats records to save to CSV.")
+
+        logger.info("Saving plots")
+        plotter = DeadNeuronPlotter(threshold=threshold, output_dir=output_dir, track_interval=track_interval)
+        plotter.plot_all(
+            percent_history=dead_neuron_tracker.percent_history,
+            weights_history=dead_neuron_tracker.weights_history)
 
         if use_wandb and wandb.run is not None:
             try:
