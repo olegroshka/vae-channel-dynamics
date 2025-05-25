@@ -8,6 +8,8 @@ project_name: "vae-dyn" # Ensure this matches your wandb project
 
 # threshold to consider neuron/weight as "dead" (for potential analysis/classification)
 threshold: 1e-5
+mean_percentage: .01
+dead_type: "threshold" # threshold / percent_of_mean / both
 
 # Data settings for ImageNette
 data:
