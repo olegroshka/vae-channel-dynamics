@@ -60,6 +60,14 @@ def main():
         logger.error(f"Invalid threshold format: {config.get('threshold')}. Using default 1e-8.")
         threshold = 1e-8
 
+    try:
+        mean_percentage = float(config.get("mean_percentage", .01))
+    except (ValueError, TypeError):
+        logger.error(f"Invalid threshold format: {config.get('mean_percentage')}. Using default .01")
+        mean_percentage = .01
+
+    dead_type = config.get("dead_type", "threshold")
+
     output_dir = os.path.join(config.get("output_dir", "./results"), run_name)
     logging_dir = os.path.join(output_dir, "logs")
     logging_config = config.get("logging", {})
@@ -204,7 +212,13 @@ def main():
     # Initialize components that might need the model
     unwrapped_model = accelerator.unwrap_model(prepared_vae_wrapper)
 
-    dead_neuron_tracker = DeadNeuronTracker(threshold, target_layer_classes, target_layer_names_for_dead_neuron_perc)
+    dead_neuron_tracker = DeadNeuronTracker(
+        target_layer_classes,
+        target_layer_names_for_dead_neuron_perc,
+        threshold,
+        mean_percentage,
+        dead_type
+    )
 
     monitor = ActivityMonitor(prepared_vae_wrapper, config.get("tracking", {}))
     classifier_config = config.get("classification", {})

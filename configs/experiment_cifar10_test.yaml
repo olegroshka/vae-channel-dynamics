@@ -7,6 +7,8 @@ run_name: "sdxl_vae_cifar10_test_run"
 
 # threshold to consider neuron as "dead"
 threshold: 1e-5
+mean_percentage: .01
+dead_type: "both" # threshold / percent_of_mean / both
 
 # Data settings for CIFAR-10 test
 data:

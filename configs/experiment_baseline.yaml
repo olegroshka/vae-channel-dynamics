@@ -7,6 +7,8 @@ run_name: "sdxl_vae_baseline_cifar10_dev" # Changed from pokemon_256
 
 # threshold to consider neuron as "dead"
 threshold: 1e-5
+mean_percentage: .01
+dead_type: "threshold" # threshold / percent_of_mean / both
 
 # Ensure tracking/intervention are disabled for baseline
 tracking:
