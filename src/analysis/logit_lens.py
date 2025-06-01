@@ -1,7 +1,7 @@
 # src/analysis/logit_lens.py
 import os
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 
 import torch
 import torch.nn as nn
@@ -64,6 +64,29 @@ class VAELogitLens:
         """Converts a layer identifier string into a filesystem-safe name."""
         return layer_identifier.replace(".", "_").replace("/", "_")
 
+    def get_layer_logit_length(self, activation_map_tensor: torch.Tensor, layer_identifier: str) -> Optional[int]:
+        """
+        Computes and logs the "logit length" (number of channels) of a given layer's
+        activation map. For Logit Lens, this is the number of channels being processed.
+
+        Args:
+            activation_map_tensor: A 4D PyTorch tensor (Batch, Channels, Height, Width)
+                                   containing the activation maps.
+            layer_identifier: String identifier for the layer.
+
+        Returns:
+            The number of channels (logit length) if the tensor is 4D, otherwise None.
+        """
+        if not isinstance(activation_map_tensor, torch.Tensor) or activation_map_tensor.ndim != 4:
+            logger.warning(
+                f"Cannot compute logit length for {layer_identifier}: activation map is not a 4D tensor. Shape: {activation_map_tensor.shape if hasattr(activation_map_tensor, 'shape') else 'N/A'}")
+            return None
+
+        num_channels = activation_map_tensor.shape[1]
+        logger.info(f"Logit length (number of channels) for layer '{layer_identifier}': {num_channels}")
+        return num_channels
+
+
     def visualize_channel_activation_maps(
             self,
             activation_map_tensor: torch.Tensor,
@@ -96,6 +119,8 @@ class VAELogitLens:
         _num_samples = num_batch_samples_to_viz if num_batch_samples_to_viz is not None else self.default_batch_samples
 
         batch_size, total_channels, height, width = activation_map_tensor.shape
+
+        self.get_layer_logit_length(activation_map_tensor, layer_identifier) # Log the logit length
 
         samples_to_process = min(_num_samples, batch_size)
         channels_to_process = min(_num_channels, total_channels)
@@ -136,7 +161,86 @@ class VAELogitLens:
         logger.info(
             f"Saved {samples_to_process * channels_to_process} activation map visualizations for {layer_identifier} at step {global_step} to {output_subdir}")
 
-    def project_with_mini_decoder(self,
+
+    def run_logit_lens_with_activations(self,
+                                        global_step: int,
+                                        layers_to_analyze: List[str],
+                                        num_batch_samples_to_viz: Optional[int],
+                                        projection_type: str,
+                                        activations_to_process: Dict[str, torch.Tensor]):
+        """
+        Performs a "Logit Lens" analysis by taking *provided* intermediate activations
+        and projecting them through a specified "lens" (e.g., mini-decoder).
+
+        Args:
+            global_step: Current training step for output file naming.
+            layers_to_analyze: List of layer names whose activations should be in `activations_to_process`.
+            num_batch_samples_to_viz: Number of batch samples to project.
+            projection_type: Defines how the projection is done.
+                             - "mini_decoder_single_channel": Projects one channel at a time via mini_decoder.
+                             - "mini_decoder_full_map": Projects the full activation map through the mini_decoder.
+            activations_to_process: A dictionary where keys are layer names (str) and values are
+                                    the captured activation tensors (B, C, H, W).
+        """
+        _num_samples = num_batch_samples_to_viz if num_batch_samples_to_viz is not None else self.default_batch_samples
+
+        logger.info(f"\n--- Running Logit Lens for step {global_step} ---")
+
+        if not activations_to_process:
+            logger.warning("No activations provided to run_logit_lens_with_activations. Skipping.")
+            return
+
+        for layer_name in layers_to_analyze:
+            if layer_name not in activations_to_process:
+                logger.warning(f"No activation found for layer '{layer_name}' in provided dict. Skipping.")
+                continue
+
+            activation_map = activations_to_process[layer_name] # (B, C, H, W)
+            batch_size, total_channels, height, width = activation_map.shape
+            samples_to_process = min(_num_samples, batch_size)
+
+            safe_layer_name = self._get_safe_layer_name(layer_name)
+            output_subdir = os.path.join(self.visualization_base_dir, f"step_{global_step}", safe_layer_name, "logit_lens_projections")
+            os.makedirs(output_subdir, exist_ok=True)
+
+            logger.info(f"Processing Logit Lens for layer '{layer_name}' with shape {activation_map.shape}")
+
+            for sample_idx in range(samples_to_process):
+                try:
+                    if projection_type == "mini_decoder_single_channel":
+                        channels_to_project = min(self.default_num_channels, total_channels)
+                        for channel_idx in range(channels_to_project):
+                            single_channel_map = activation_map[sample_idx, channel_idx, :, :].unsqueeze(0).unsqueeze(0)
+                            projected_img = self._project_through_mini_decoder(single_channel_map)
+                            save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_channel_{channel_idx}.png")
+                            TF.to_pil_image(projected_img.squeeze(0)).save(save_path)
+                            logger.debug(f"Saved projection for {layer_name}, sample {sample_idx}, channel {channel_idx}")
+
+                    elif projection_type == "mini_decoder_full_map":
+                        full_map_tensor = activation_map[sample_idx:sample_idx+1, :, :, :]
+                        projected_img = self._project_through_mini_decoder(full_map_tensor)
+                        save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_full_map.png")
+                        TF.to_pil_image(projected_img.squeeze(0)).save(save_path)
+                        logger.debug(f"Saved full map projection for {layer_name}, sample {sample_idx}")
+                    else:
+                        logger.warning(f"Unknown projection_type: {projection_type}. Skipping.")
+
+                except Exception as e:
+                    logger.error(f"Error during Logit Lens projection for layer '{layer_name}', sample {sample_idx}: {e}", exc_info=True)
+        logger.info(f"Logit Lens analysis completed for step {global_step}.")
+
+
+    def _project_through_mini_decoder(self, input_tensor: torch.Tensor) -> torch.Tensor:
+        """Helper to run a tensor through the mini_decoder."""
+        # Ensure mini_decoder is on the same device as the input tensor
+        if self.mini_decoder[0].weight.device != input_tensor.device:
+            input_tensor = input_tensor.to(self.mini_decoder[0].weight.device)
+        with torch.no_grad():
+            projected_patch = self.mini_decoder(input_tensor)
+        return projected_patch
+
+
+    def project_with_mini_decoder(self, # Keeping this for backwards compatibility/specific single-channel use
                                   activation_map_tensor: torch.Tensor,
                                   layer_identifier: str,
                                   global_step: int,
@@ -187,6 +291,84 @@ class VAELogitLens:
         except Exception as e:
             logger.error(f"Error during mini-decoder projection for {layer_identifier}: {e}", exc_info=True)
 
+    def run_logit_lens_with_activations(self,
+                                        global_step: int,
+                                        layers_to_analyze: List[str],
+                                        num_batch_samples_to_viz: Optional[int],
+                                        projection_type: str,
+                                        activations_to_process: Dict[str, torch.Tensor]):
+        """
+        Performs a "Logit Lens" analysis by taking *provided* intermediate activations
+        and projecting them through a specified "lens" (e.g., mini-decoder).
+
+        Args:
+            global_step: Current training step for output file naming.
+            layers_to_analyze: List of layer names whose activations should be in `activations_to_process`.
+            num_batch_samples_to_viz: Number of batch samples to project.
+            projection_type: Defines how the projection is done.
+                             - "mini_decoder_single_channel": Projects one channel at a time via mini_decoder.
+                             - "mini_decoder_full_map": Projects the full activation map through the mini_decoder.
+            activations_to_process: A dictionary where keys are layer names (str) and values are
+                                    the captured activation tensors (B, C, H, W) (expected on CPU).
+        """
+        _num_samples = num_batch_samples_to_viz if num_batch_samples_to_viz is not None else self.default_batch_samples
+
+        logger.info(f"\n--- Running Logit Lens for step {global_step} ---")
+
+        if not activations_to_process:
+            logger.warning("No activations provided to run_logit_lens_with_activations. Skipping.")
+            return
+
+        for layer_name in layers_to_analyze: # Loop through the layers you want to analyze
+            if layer_name not in activations_to_process:
+                logger.warning(f"No activation found for layer '{layer_name}' in provided dict. Skipping.")
+                continue
+
+            activation_map = activations_to_process[layer_name] # Get the activation tensor for this layer
+            batch_size, total_channels, height, width = activation_map.shape
+            samples_to_process = min(_num_samples, batch_size)
+
+            safe_layer_name = self._get_safe_layer_name(layer_name)
+            # Create output directory structure
+            output_subdir = os.path.join(self.visualization_base_dir, f"step_{global_step}", safe_layer_name, "logit_lens_projections")
+            os.makedirs(output_subdir, exist_ok=True)
+
+            logger.info(f"Processing Logit Lens for layer '{layer_name}' with shape {activation_map.shape}")
+
+            for sample_idx in range(samples_to_process): # Loop through batch samples
+                try:
+                    if projection_type == "mini_decoder_single_channel":
+                        channels_to_project = min(self.default_num_channels, total_channels)
+                        for channel_idx in range(channels_to_project): # Loop through channels to project
+                            # Select a single channel and add batch and channel dimension: (1, 1, H, W)
+                            single_channel_map = activation_map[sample_idx, channel_idx, :, :].unsqueeze(0).unsqueeze(0)
+                            # Pass this single channel through the mini_decoder
+                            projected_img = self._project_through_mini_decoder(single_channel_map)
+                            # Save the resulting image
+                            save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_channel_{channel_idx}.png")
+                            TF.to_pil_image(projected_img.squeeze(0)).save(save_path)
+                            logger.debug(f"Saved projection for {layer_name}, sample {sample_idx}, channel {channel_idx}")
+
+                    elif projection_type == "mini_decoder_full_map":
+                        # Select the full activation map for one sample: (1, C, H, W)
+                        full_map_tensor = activation_map[sample_idx:sample_idx+1, :, :, :]
+                        # Important check: does the mini_decoder have the right input channels?
+                        if full_map_tensor.shape[1] != self.mini_decoder[0].in_channels:
+                            logger.warning(f"Mismatch: Mini-decoder expects {self.mini_decoder[0].in_channels} input channels, "
+                                           f"but layer '{layer_name}' has {full_map_tensor.shape[1]} channels. Skipping full map projection.")
+                            continue
+                        # Pass the entire activation map through the mini_decoder
+                        projected_img = self._project_through_mini_decoder(full_map_tensor)
+                        # Save the resulting image
+                        save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_full_map.png")
+                        TF.to_pil_image(projected_img.squeeze(0)).save(save_path)
+                        logger.debug(f"Saved full map projection for {layer_name}, sample {sample_idx}")
+                    else:
+                        logger.warning(f"Unknown projection_type: {projection_type}. Skipping.")
+
+                except Exception as e:
+                    logger.error(f"Error during Logit Lens projection for layer '{layer_name}', sample {sample_idx}: {e}", exc_info=True)
+        logger.info(f"Logit Lens analysis completed for step {global_step}.")
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

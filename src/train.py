@@ -480,7 +480,16 @@ def main():
         time.sleep(10)
 
     if accelerator.is_main_process:
-        # ... (existing final model saving and dead neuron plotting) ...
+        final_model_save_path = os.path.join(output_dir, "final_model")
+        logger.info(f"Saving final model state to {final_model_save_path}")
+        try:
+            accelerator.save_state(final_model_save_path) # Save optimizer, scheduler etc.
+
+            logger.info(f"Saving final unwrapped VAE model to {final_model_save_path}/vae")
+            unwrapped_model = accelerator.unwrap_model(vae_wrapper)
+            unwrapped_model.vae.save_pretrained(os.path.join(final_model_save_path, "vae"))
+        except Exception as final_save_e:
+            logger.error(f"Error saving final model/state: {final_save_e}")
 
         logger.info("Exporting tracked activation statistics to CSV...")
         activation_stats_records = monitor.export_all_processed_data_to_records()
