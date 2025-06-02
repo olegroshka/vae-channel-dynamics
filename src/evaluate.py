@@ -6,6 +6,7 @@ import sys
 import torch
 import torch.nn.functional as F  # <<< Added missing import for F.mse_loss
 import torchvision.transforms as T  # <<< Added missing import
+from torchvision.utils import make_grid
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from tqdm.auto import tqdm
@@ -16,6 +17,8 @@ from models.sdxl_vae_wrapper import SDXLVAEWrapper
 # Local imports
 from utils.config_utils import load_config
 from utils.logging_utils import setup_logging
+
+from analysis.logit_lens import VAELogitLens
 
 # Setup basic logging
 setup_logging()
@@ -60,6 +63,40 @@ def parse_args():
         default=None, # Use config batch size by default
         help="Override evaluation batch size.",
     )
+    parser.add_argument(
+        "--enable_logit_lens",
+        default=True,
+        help="Enable Logit Lens analysis during evaluation.",
+    )
+    parser.add_argument(
+        "--logit_lens_layers",
+        type=str,
+        nargs="+",
+        default=["encoder.down_blocks.0.resnets.0.norm1", "encoder.down_blocks.1.resnets.0.conv_shortcut"],
+        help="Space-separated list of layer names to apply Logit Lens to (e.g., 'encoder.conv1' 'encoder.conv2')."
+             "Refer to your VAE's module names (e.g., by printing model.named_modules())."
+             "For the default AutoencoderKL, common encoder layers are 'encoder.conv_in', 'encoder.down_blocks.0.resnets.0.norm1', etc.",
+    )
+    parser.add_argument(
+        "--logit_lens_num_samples",
+        type=int,
+        default=1,
+        help="Number of batch samples to project for Logit Lens visualization.",
+    )
+    parser.add_argument(
+        "--logit_lens_projection_type",
+        type=str,
+        default="mini_decoder_single_channel",
+        choices=["mini_decoder_single_channel", "mini_decoder_full_map"],
+        help="Type of projection for Logit Lens. 'mini_decoder_single_channel' or 'mini_decoder_full_map'.",
+    )
+    parser.add_argument(
+        "--logit_lens_mini_decoder_input_channels",
+        type=int,
+        default=None, # Will try to infer if not provided
+        help="Input channels for the Logit Lens mini-decoder. Crucial if using 'mini_decoder_full_map'."
+             "If not provided, defaults to 1 for 'mini_decoder_single_channel'."
+    )
     args = parser.parse_args()
     return args
 
@@ -100,6 +137,35 @@ def main():
     except Exception as e:
         logger.error(f"Failed to load model: {e}", exc_info=True)
         return
+
+    logit_lens_analyzer = None
+    if args.enable_logit_lens:
+        logger.info("Logit Lens analysis enabled.")
+        # If mini_decoder_input_channels is not specified, infer it for single_channel
+        # For full_map, it MUST be specified.
+        ll_mini_decoder_input_channels = args.logit_lens_mini_decoder_input_channels
+        if args.logit_lens_projection_type == "mini_decoder_single_channel" and ll_mini_decoder_input_channels is None:
+            ll_mini_decoder_input_channels = 1 # Single channel projection expects 1 input channel
+            logger.info(f"Defaulting mini_decoder_input_channels to 1 for '{args.logit_lens_projection_type}'")
+        elif args.logit_lens_projection_type == "mini_decoder_full_map" and ll_mini_decoder_input_channels is None:
+            logger.error(
+                f"For 'mini_decoder_full_map' projection, --logit_lens_mini_decoder_input_channels must be specified "
+                f"(it should match the 'Channels' dimension of the activation map)."
+            )
+            sys.exit(1) # Exit if critical config is missing
+
+        logit_lens_config = {
+            "visualization_output_subdir": "logit_lens_visualizations",
+            "default_num_channels_to_viz": 4, # Used by channel visualization
+            "default_num_batch_samples_to_viz": args.logit_lens_num_samples, # For channel viz
+            "mini_decoder_input_channels": ll_mini_decoder_input_channels
+        }
+        # Pass the actual VAE model (AutoencoderKL) to VAELogitLens
+        logit_lens_analyzer = VAELogitLens(
+            model_for_lens=vae_wrapper.vae, # Pass the underlying AutoencoderKL
+            logit_lens_config=logit_lens_config,
+            main_experiment_output_dir=args.output_dir # Use eval output dir
+        )
 
     # --- Load Dataset ---
     data_config = config.get("data", {})
@@ -143,7 +209,7 @@ def main():
     with torch.no_grad():
         for step, batch in enumerate(eval_dataloader):
             if step == 0:
-                vae_wrapper.add_hook(args.output_dir)
+                vae_wrapper.add_hooks(args.logit_lens_layers)
 
             pixel_values = batch.get("pixel_values")
             if pixel_values is None:
@@ -195,7 +261,29 @@ def main():
             current_avg_kl = total_kl / num_batches if num_batches > 0 else 0
             progress_bar.set_postfix(MSE=f"{current_avg_mse:.4e}", KL=f"{current_avg_kl:.4e}")
 
-            vae_wrapper.remove_hook()
+            if step == 0:
+                activations = vae_wrapper.get_captured_activations()
+                for layer, activation in activations.items():
+                    for i in range(min(activation.shape[0], 10)):
+                        out = activation[i].squeeze(0)
+                        out.clamp(min=out.min(), max=out.max())
+                        out_grid = out.unsqueeze(1)
+                        grid_img = make_grid(out_grid, nrow=8, normalize=True, padding=2)
+                        output_pil = T.ToPILImage()(grid_img)
+                        output_pil.save(f"{args.output_dir}/out_{i}.png")
+                        print(f"Saved to {args.output_dir}/out_{i}.png")
+
+                if args.enable_logit_lens and logit_lens_analyzer is not None:
+                    if accelerator.is_local_main_process:
+                        logit_lens_analyzer.run_logit_lens_with_activations(
+                            global_step=0,
+                            layers_to_analyze=args.logit_lens_layers,
+                            num_batch_samples_to_viz=args.logit_lens_num_samples,
+                            projection_type=args.logit_lens_projection_type,
+                            activations_to_process=activations,
+                        )
+
+                vae_wrapper.remove_hooks()
 
 
     # --- Final Metrics ---

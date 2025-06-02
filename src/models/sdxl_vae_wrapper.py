@@ -1,12 +1,9 @@
 # src/models/sdxl_vae_wrapper.py
 import logging
-import os
 
 import torch
-import torchvision.transforms as T
-from torchvision.utils import make_grid
 from diffusers import AutoencoderKL
-from typing import Optional, Union
+from typing import Optional, Union, Dict, List, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -18,20 +15,14 @@ class SDXLVAEWrapper(torch.nn.Module):
     def __init__(self,
                  pretrained_model_name_or_path: str = "stabilityai/sdxl-vae",
                  torch_dtype: Optional[Union[str, torch.dtype]] = None):
-        """
-        Initializes the VAE wrapper.
-
-        Args:
-            pretrained_model_name_or_path: The Hugging Face model ID or local path
-                                           to the pre-trained VAE.
-            torch_dtype: Optional torch dtype to load the model in (e.g., torch.float16).
-        """
         super().__init__()
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
         self.torch_dtype = torch_dtype
         self.vae = self._load_vae()
         self.scaling_factor = self.vae.config.scaling_factor
-        self.hook = None
+
+        self._hook_handles: List[torch.utils.hooks.RemovableHandle] = []
+        self._captured_activations: Dict[str, torch.Tensor] = {} # Stores activations by layer name
 
     def _load_vae(self) -> AutoencoderKL:
         """Loads the AutoencoderKL model from Hugging Face Hub or local path."""
@@ -85,6 +76,72 @@ class SDXLVAEWrapper(torch.nn.Module):
             "latents_sampled": latents # Return the unscaled latents
         }
 
+    def _capture_activation_hook_fn(self, name: str) -> Callable:
+        """
+        Returns a hook function that captures the output of a module
+        and stores it in _captured_activations.
+        """
+        def hook(module: torch.nn.Module, input_data: torch.Tensor, output_data: torch.Tensor):
+            # We detach and move to CPU immediately to manage GPU memory,
+            # especially if many activations are captured or for large models.
+            self._captured_activations[name] = output_data.detach().cpu()
+            # logger.debug(f"Captured activation for '{name}'. Shape: {output_data.shape}")
+        return hook
+
+    def add_hooks(self, layer_names: List[str]):
+        """
+        Registers forward hooks on specified layers of the VAE.
+        Clears existing hooks first to avoid duplicates.
+
+        Args:
+            layer_names: A list of string identifiers for the layers (e.g., 'encoder.conv_in').
+                         These names must match those from self.vae.named_modules().
+        """
+        # Clear any previously registered hooks to ensure a clean state
+        self.remove_hooks()
+
+        found_any_hook = False
+        for name, module in self.vae.named_modules():
+            if name in layer_names:
+                handle = module.register_forward_hook(self._capture_activation_hook_fn(name))
+                self._hook_handles.append(handle)
+                logger.info(f"Registered activation hook for VAE layer: '{name}'")
+                found_any_hook = True
+
+        if not found_any_hook and layer_names: # Warn only if layers were specified but none found
+            print(layer_names)
+            logger.warning(f"No hooks registered. Ensure layer names {layer_names} are correct and exist in the VAE.")
+
+    def remove_hooks(self):
+        """
+        Removes all active forward hooks registered by this wrapper and clears
+        the dictionary of captured activations.
+        """
+        if not self._hook_handles:
+            # logger.debug("No hooks to remove.")
+            return
+
+        for handle in self._hook_handles:
+            handle.remove()
+        self._hook_handles.clear()
+        self._captured_activations.clear()
+        logger.info("Cleared all VAE model hooks and captured activations.")
+
+    def get_captured_activations(self) -> Dict[str, torch.Tensor]:
+        """
+        Returns a dictionary of captured activations.
+        Keys are layer names, values are the activation tensors (on CPU, detached).
+        """
+        return self._captured_activations
+
+    def clear_captured_activations(self):
+        """
+        Clears the stored captured activations without removing the hooks themselves.
+        Useful if you want to capture activations for a new batch.
+        """
+        self._captured_activations.clear()
+        logger.debug("Cleared captured activations from memory.")
+
     # --- Convenience methods for inference (similar to sdxl_vae.py) ---
 
     @torch.no_grad()
@@ -121,26 +178,6 @@ class SDXLVAEWrapper(torch.nn.Module):
         image = image.clamp(-1, 1) # Clamp output
         return image
 
-    def add_hook(self, path: str):
-        directory = f'{path}/intermediates'
-        os.makedirs(directory, exist_ok=True)
-
-        def hook_fn(module, input, output):
-            output_tensor = output.detach()
-            for i in range(min(output_tensor.shape[0], 10)):
-                out = output_tensor[i].squeeze(0)
-                out.clamp(min=out.min(), max=out.max())
-                out_grid = out.unsqueeze(1)
-                grid_img = make_grid(out_grid, nrow=8, normalize=True, padding=2)
-                output_pil = T.ToPILImage()(grid_img)
-                output_pil.save(f"{directory}/out_{i}.png")
-                print(f"Saved to {directory}/out_{i}.png")
-
-        self.hook = self.vae.encoder.down_blocks[1].resnets[0].conv_shortcut.register_forward_hook(hook_fn)
-
-    def remove_hook(self):
-        if self.hook is not None:
-            self.hook.remove()
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
@@ -173,18 +210,5 @@ if __name__ == '__main__':
         print(f"Decoded image shape: {decoded_image.shape}")
         print(f"Decoded image min/max: {decoded_image.min():.4f}, {decoded_image.max():.4f}")
 
-        # Check if reconstruction from forward pass matches decode(encode(input))
-        # Note: Will not match exactly if sample_posterior=True due to sampling randomness
-        output_dict_deterministic = vae_wrapper(dummy_input, sample_posterior=False)
-        latents_mean = output_dict_deterministic['latent_dist'].mode() # Get mean latents
-        reconstruction_from_mean = vae_wrapper.vae.decode(latents_mean).sample.clamp(-1, 1)
-
-        # Compare reconstruction_from_mean with output_dict_deterministic['reconstruction']
-        # They should be very close
-        diff = torch.abs(reconstruction_from_mean - output_dict_deterministic['reconstruction']).mean()
-        print(f"Difference between forward(mean) and decode(mean): {diff.item():.6f}")
-
-
     except Exception as e:
         logger.error(f"An error occurred during example usage: {e}", exc_info=True)
-
