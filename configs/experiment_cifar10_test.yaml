@@ -126,7 +126,7 @@ logit_lens:
 classification:
   enabled: true
   method: "threshold_groupnorm_activity"
-  threshold: 0.01 # <<< Adjust this threshold based on typical activation scales
+  threshold: 0.1 # <<< Adjust this threshold based on typical activation scales
   target_metric_key: "mean_abs_activation_per_channel"
   # Optional: Specify which monitor outputs to classify.
   # If empty, it will try to classify all applicable layers from monitor's data.
@@ -147,7 +147,7 @@ intervention:
                             # e.g., if log_interval is 10, this will intervene at step 20, 40, etc.
   # For testing purposes, train.py can read these to create dummy classification results
   # This allows testing InterventionHandler without a fully functional RegionClassifier.
-  dummy_classification_targets: []
+  #dummy_classification_targets: []
     # Example:
     # - layer_key: "decoder_block0_norm1" # An arbitrary key for these targets
     #   param_name_scale: "vae.decoder.up_blocks.0.resnets.0.norm1.weight" # Actual param name of GN scale

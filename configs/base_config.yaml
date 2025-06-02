@@ -44,6 +44,12 @@ saving:
   save_interval: 500 # Save checkpoint every N global steps
   checkpoint_dir_prefix: "chkpt" # Prefix for checkpoint subdirectories
 
+# In base_config.yaml or experiment_cifar10_test.yaml
+dead_neuron_tracking:
+  enabled: true # Or false
+  track_interval: 100 # Or same as activity_monitor_track_interval
+  target_layer_names_for_raw_weights: [] # If you want to log raw weights for specific layers
+
 # Threshold for considering a weight "dead" or "near-zero"
 threshold: 1e-8
 
