@@ -53,7 +53,7 @@ class VAELogitLens:
         # This is a very basic example, input channels would depend on the activation map.
         # For a single channel input (H, W), it would need to be unsqueezed.
         self.mini_decoder = nn.Sequential(
-            nn.ConvTranspose2d(self.config["mini_decoder_input_channels"], 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # Example: upscale
+            nn.ConvTranspose2d(self.config.get("mini_decoder_input_channels", 1), 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # Example: upscale
             nn.ReLU(),
             nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1),  # Example: to RGB
             nn.Sigmoid()  # Output to [0,1] for image

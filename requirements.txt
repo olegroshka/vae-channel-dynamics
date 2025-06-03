@@ -20,5 +20,6 @@ PyYAML # For config files
 Pillow # For image handling
 matplotlib
 
+torchmetrics
 # Optional: For distributed training features sometimes checked by accelerate
 # deepspeed

@@ -1,164 +1,115 @@
-# Inherit from base config
+# configs/experiment_cifar10_test.yaml
+
 defaults:
   - base_config
 
 # Override specific settings for this CIFAR-10 test run
 run_name: "sdxl_vae_cifar10_test_run"
 
-# threshold to consider neuron as "dead"
-threshold: 1e-5
-mean_percentage: .01
-dead_type: "both" # threshold / percent_of_mean / both
+# Threshold for DeadNeuronTracker (weights).
+# Set higher to test if plot generates. Tune based on actual weight scales later.
+threshold: 1e-3 # Was "1e-5", then "0.05". Let's try 0.01.
 
-# Data settings for CIFAR-10 test
+mean_percentage: 0.1 # For DeadNeuronTracker if dead_type uses it
+dead_type: "both"    # For DeadNeuronTracker
+
 data:
-  dataset_name: "uoft-cs/cifar10" # Official HF ID for CIFAR-10
-  image_column: "img"            # Correct image column for CIFAR-10
-  resolution: 64                 # Use smaller resolution for faster dev run
-  max_samples: 100               # Use only 100 samples for training
-  batch_size: 8                  # Can use slightly larger BS for smaller images
-  num_workers: 0                 # Use 0 workers for simplicity in test run
-  do_validation: true                 # <<< ENSURE THIS IS TRUE
-  validation_split_name: "test"       # <<< For CIFAR-10, "test" is the typical validation/test split
-  validation_max_samples: 50          # For quick dev run
+  dataset_name: "uoft-cs/cifar10"
+  image_column: "img"
+  resolution: 64
+  max_samples: 100
+  batch_size: 8
+  num_workers: 0
+  do_validation: true
+  validation_split_name: "test"
+  validation_dataset_name: "uoft-cs/cifar10"
+  validation_max_samples: 50
   validation_batch_size: 8
 
-
-# Training settings for a quick test
 training:
-  num_train_epochs: 10           # Train for only 10 epoch
-  learning_rate: 5e-5            # Might need slight adjustment for different data/res
+  num_train_epochs: 10
+  learning_rate: "5e-5"
   gradient_accumulation_steps: 1
-  mixed_precision: "no"          # Use 'no' for CPU or if fp16 causes issues on small runs
-  kl_weight: 1e-6                # Ensure KL weight is present if base default changes
-  max_grad_norm: 1.0             # Ensure grad norm is present if base default changes
-  validation_epochs: 1           # Validate every epoch
-  validation_steps: 0            # Set to 0 or null if using epoch-based validation
+  mixed_precision: "no"
+  kl_weight: "1e-6"
+  max_grad_norm: 1.0
+  validation_epochs: 1
+  validation_steps: 0
 
-# Logging and Saving for quick test
 logging:
-  log_interval: 10               # Log more frequently
-  report_to: "wandb"             # <<< Changed back to wandb
-  # entity: "vae-dyn"            # Inherited from base_config
+  log_interval: 10
+  report_to: "wandb"
 saving:
-  save_interval: 50              # Save checkpoint relatively frequently
-  checkpoint_dir_prefix: "chkpt" # Inherited, ensure present
+  save_interval_steps: 50
+  checkpoint_dir_prefix: "chkpt"
 
-# tracking/intervention are disabled for this test
-#tracking:
-#  enabled: true
-#  track_interval: 10 # A reasonable interval for experiments
-#  target_layers:
-#    # Encoder Layers (example: first, middle, last down blocks)
-#    - name: "vae.encoder.conv_in"
-#      capture_point: "output"
-#      metrics: ["mean_abs_activation_per_channel", "std_activation"]
-#    - name: "vae.encoder.down_blocks.0.resnets.0.norm1"
-#      capture_point: "input"
-#      metrics: ["mean_abs_activation_per_channel", "full_activation_map"] # Monitor one pre-norm closely
-#    - name: "vae.encoder.down_blocks.0.resnets.0.norm1"
-#      capture_point: "output"
-#      metrics: ["mean_abs_activation_per_channel"]
-#    - name: "vae.encoder.down_blocks.1.resnets.1.norm2" # Example mid-encoder layer
-#      capture_point: "input"
-#      metrics: ["mean_abs_activation_per_channel"]
-#    - name: "vae.encoder.down_blocks.1.resnets.1.norm2"
-#      capture_point: "output"
-#      metrics: ["mean_abs_activation_per_channel"]
-#    - name: "vae.encoder.conv_norm_out" # Before projecting to latent space
-#      capture_point: "output" # Output of the norm for the conv before latent projection
-#      metrics: ["mean_abs_activation_per_channel"]
-#    - name: "vae.encoder.conv_out" # After projecting to latent space (parameters of DiagonalGaussianDistribution)
-#      capture_point: "output" # This is actually the DiagonalGaussianDistribution object, hook might need adjustment or target its parameters
-#      metrics: ["mean_abs_activation_per_channel"] # Or custom metric for distribution params
-#
-#    # Decoder Layers (example: first, middle, last up blocks)
-#    - name: "vae.decoder.conv_in"
-#      capture_point: "output"
-#      metrics: ["mean_abs_activation_per_channel", "std_activation"]
-#    - name: "vae.decoder.up_blocks.0.resnets.0.norm1"
-#      capture_point: "input"
-#      metrics: ["mean_abs_activation_per_channel", "full_activation_map"] # Monitor one pre-norm closely
-#    - name: "vae.decoder.up_blocks.0.resnets.0.norm1"
-#      capture_point: "output"
-#      metrics: ["mean_abs_activation_per_channel"]
-#    - name: "vae.decoder.up_blocks.1.resnets.1.norm2" # Example mid-decoder layer
-#      capture_point: "input"
-#      metrics: ["mean_abs_activation_per_channel"]
-#    - name: "vae.decoder.up_blocks.1.resnets.1.norm2"
-#      capture_point: "output"
-#      metrics: ["mean_abs_activation_per_channel"]
-#    - name: "vae.decoder.conv_norm_out"
-#      capture_point: "output"
-#      metrics: ["mean_abs_activation_per_channel"]
-#    - name: "vae.decoder.conv_out"
-#      capture_point: "output" # Final image output
-#      metrics: ["mean_abs_activation_per_channel", "mean_activation", "std_activation"]
-tracking:
+dead_neuron_tracking: # Config section for DeadNeuronTracker
+  enabled: true
+  track_interval: 1 # More frequent for this short dev run (e.g., every 20 steps)
+  # List of specific parameter names for which to store raw weight history (for heatmaps)
+  target_layer_names_for_raw_weights:
+    - "vae.encoder.conv_in.weight"
+    - "vae.decoder.conv_out.weight"
+    - "vae.encoder.down_blocks.0.resnets.0.norm1.weight" # A GroupNorm weight
+    - "vae.encoder.down_blocks.0.resnets.0.norm1.bias"   # A GroupNorm bias
+
+tracking: # Config section for ActivityMonitor
   enabled: true
   track_interval: 10 # ActivityMonitor processes data every 10 steps
   target_layers:
-    - name: "vae.encoder.down_blocks.0.resnets.0.norm1" # A GroupNorm layer
-      capture_point: "output" # Classifier needs output activations of the norm layer
-      metrics:
-        - "mean_abs_activation_per_channel" # Metric for the classifier
-        - "full_activation_map" # For LogitLens (optional here)
-    - name: "vae.decoder.up_blocks.0.resnets.0.norm1" # An example decoder GroupNorm layer
+    - name: "vae.encoder.conv_in"
       capture_point: "output"
-      metrics:
-        - "mean_abs_activation_per_channel"
-    - name: "vae.decoder.up_blocks.1.resnets.0.norm1" # Another GroupNorm - ensure this is tracked if classified
+      metrics: ["mean_abs_activation_per_channel"]
+    - name: "vae.encoder.down_blocks.0.resnets.0.norm1" # GN for classifier & LogitLens
+      capture_point: "output" # For classifier
+      metrics: ["mean_abs_activation_per_channel", "full_activation_map"]
+    - name: "vae.encoder.down_blocks.0.resnets.0.norm1" # Also capture INPUT for LogitLens
+      capture_point: "input"
+      metrics: ["full_activation_map"]
+    - name: "vae.decoder.up_blocks.0.resnets.0.norm1"   # Another GN
       capture_point: "output"
-      metrics:
-        - "mean_abs_activation_per_channel"
-    # Add other layers if you want to monitor them, but ensure the ones
-    # targeted by the classifier have 'mean_abs_activation_per_channel' on their 'output'.
+      metrics: ["mean_abs_activation_per_channel"]
+    - name: "vae.decoder.up_blocks.1.resnets.0.norm1" # GN for classifier
+      capture_point: "output"
+      metrics: ["mean_abs_activation_per_channel"]
+    # Example for another LogitLens target (ensure this layer exists and you want its input)
+    # - name: "vae.decoder.up_blocks.2.resnets.2.norm2"
+    #   capture_point: "input"
+    #   metrics: ["full_activation_map"]
 
-
-# --- Logit Lens Configuration for DEV ---
 logit_lens:
   enabled: true
-  visualization_interval: 20 # Generate visualizations fairly often for testing (e.g., every 20 steps)
-  target_tracked_metrics:
-    # These MUST match what ActivityMonitor stores.
-    # It's layer_identifier (from monitor) + "." + metric_name (which should be 'full_activation_map')
-    - "vae.encoder.down_blocks.0.resnets.0.norm1.input.full_activation_map"
-    - "vae.decoder.up_blocks.2.resnets.2.norm2.input.full_activation_map"
+  visualization_interval: 20
+  target_tracked_metrics: # These MUST match keys from ActivityMonitor's output
+    # (layer_name + "." + capture_point + "." + metric_name)
+    - "vae.encoder.down_blocks.0.resnets.0.norm1.input.full_activation_map" # Matches tracking above
+    # If you added tracking for the decoder layer above, uncomment this:
+    # - "vae.decoder.up_blocks.2.resnets.2.norm2.input.full_activation_map"
+  layers_to_analyze_direct: []
   num_channels_to_viz: 2
   num_batch_samples_to_viz: 1
-  colormap: 'gray'
-  run_mini_decoder_projection: true # Test this as well
+  colormap: 'viridis'
+  run_mini_decoder_projection: true
+  # Add specific args for run_logit_lens_with_activations if **logit_lens_config isn't used by VAELogitLens
+  # For example, if VAELogitLens expects 'layers_to_analyze', 'num_batch_samples_to_viz', etc. explicitly.
+  # The current train.py passes them like this:
+  # layers_to_analyze=logit_lens_config.get("layers_to_analyze_direct", logit_lens_config.get("target_tracked_metrics", [])),
+  # num_batch_samples_to_viz=logit_lens_config.get("num_batch_samples_to_viz", 1),
+  # projection_type=logit_lens_config.get("projection_type", "mini_decoder_single_channel")
 
 
 classification:
   enabled: true
   method: "threshold_groupnorm_activity"
-  threshold: 0.1 # <<< Adjust this threshold based on typical activation scales
+  threshold: 0.2
   target_metric_key: "mean_abs_activation_per_channel"
-  # Optional: Specify which monitor outputs to classify.
-  # If empty, it will try to classify all applicable layers from monitor's data.
-  # These are layer_identifiers from ActivityMonitor (e.g., "module.name.output")
   layers_to_classify:
     - "vae.encoder.down_blocks.0.resnets.0.norm1.output"
     - "vae.decoder.up_blocks.1.resnets.0.norm1.output"
 
-
 intervention:
   enabled: true
-  strategy: "gentle_nudge_groupnorm_scale" # "gentle_nudge_groupnorm_scale" or "reset_groupnorm_scale"
-  nudge_factor: 1.05  # Multiplicative factor for gentle nudge
-  # nudge_value_add: 0.01 # Alternative: additive value for gentle nudge
-  max_scale_value: 1.5  # Cap for nudged GroupNorm scales
-  intervention_interval: 20 # How often (global steps) to apply interventions.
-                            # Make sure this triggers a few times in your test run.
-                            # e.g., if log_interval is 10, this will intervene at step 20, 40, etc.
-  # For testing purposes, train.py can read these to create dummy classification results
-  # This allows testing InterventionHandler without a fully functional RegionClassifier.
-  #dummy_classification_targets: []
-    # Example:
-    # - layer_key: "decoder_block0_norm1" # An arbitrary key for these targets
-    #   param_name_scale: "vae.decoder.up_blocks.0.resnets.0.norm1.weight" # Actual param name of GN scale
-    #   inactive_channel_indices: [0, 1, 2] # Indices to nudge in this GN layer
-    # - layer_key: "encoder_block1_norm2"
-    #   param_name_scale: "vae.encoder.down_blocks.1.resnets.1.norm2.weight"
-    #   inactive_channel_indices: [3, 4]
+  strategy: "gentle_nudge_groupnorm_scale"
+  nudge_factor: 1.05
+  max_scale_value: 1.5
+  intervention_interval: 20
