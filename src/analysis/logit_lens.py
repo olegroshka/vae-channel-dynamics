@@ -53,7 +53,7 @@ class VAELogitLens:
         # This is a very basic example, input channels would depend on the activation map.
         # For a single channel input (H, W), it would need to be unsqueezed.
         self.mini_decoder = nn.Sequential(
-            nn.ConvTranspose2d(1, 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # Example: upscale
+            nn.ConvTranspose2d(self.config["mini_decoder_input_channels"], 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # Example: upscale
             nn.ReLU(),
             nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1),  # Example: to RGB
             nn.Sigmoid()  # Output to [0,1] for image
@@ -130,6 +130,10 @@ class VAELogitLens:
         os.makedirs(output_subdir, exist_ok=True)
 
         for sample_idx in range(samples_to_process):
+            fig, axes = plt.subplots(1, channels_to_process, figsize=(channels_to_process * 4, 4))
+            if channels_to_process == 1: # Handle the case of a single subplot
+                axes = [axes]
+
             for channel_idx in range(channels_to_process):
                 try:
                     # Extract single channel map (H, W)
@@ -141,25 +145,23 @@ class VAELogitLens:
                     if map_max - map_min > 1e-6:  # Avoid division by zero if map is flat
                         normalized_map = (channel_map - map_min) / (map_max - map_min)
                     else:
-                        normalized_map = torch.zeros_like(channel_map)  # or ones_like, or assign map_min
+                        normalized_map = torch.zeros_like(channel_map)
 
-                    # Convert to PIL Image using a colormap
-                    # plt.imsave expects a NumPy array
-                    pil_img = Image.fromarray(
-                        (plt.cm.get_cmap(colormap)(normalized_map.numpy())[:, :, :3] * 255).astype(np.uint8))
+                    # Plot on the subplot
+                    axes[channel_idx].imshow(normalized_map.numpy(), cmap=colormap)
+                    axes[channel_idx].set_title(f'Channel {channel_idx}')
+                    axes[channel_idx].axis('off') # Hide axes ticks
 
-                    # Alternative: Convert directly to grayscale PIL Image
-                    # pil_img = TF.to_pil_image(normalized_map.unsqueeze(0)) # Add channel dim for grayscale
-
-                    save_path = os.path.join(output_subdir, f"sample_{sample_idx}_channel_{channel_idx}.png")
-                    pil_img.save(save_path)
                 except Exception as e:
                     logger.error(
                         f"Error visualizing map for {layer_identifier}, sample {sample_idx}, channel {channel_idx}: {e}",
                         exc_info=True)
 
-        logger.info(
-            f"Saved {samples_to_process * channels_to_process} activation map visualizations for {layer_identifier} at step {global_step} to {output_subdir}")
+            plt.tight_layout()
+            save_path = os.path.join(output_subdir, f"sample_{sample_idx}_all_channels.png")
+            plt.savefig(save_path)
+            plt.close(fig)
+            logger.info(f"Saved combined activation map visualization for {layer_identifier}, sample {sample_idx} to {save_path}")
 
 
     def run_logit_lens_with_activations(self,
@@ -209,18 +211,46 @@ class VAELogitLens:
                 try:
                     if projection_type == "mini_decoder_single_channel":
                         channels_to_project = min(self.default_num_channels, total_channels)
+                        # Instead of saving individual images, create a single figure for all projected channels
+                        fig_proj, axes_proj = plt.subplots(1, channels_to_project, figsize=(channels_to_project * 4, 4))
+                        if channels_to_project == 1:
+                            axes_proj = [axes_proj] # Ensure axes is iterable for single subplot case
+
                         for channel_idx in range(channels_to_project):
                             single_channel_map = activation_map[sample_idx, channel_idx, :, :].unsqueeze(0).unsqueeze(0)
                             projected_img = self._project_through_mini_decoder(single_channel_map)
-                            save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_channel_{channel_idx}.png")
-                            TF.to_pil_image(projected_img.squeeze(0)).save(save_path)
-                            logger.debug(f"Saved projection for {layer_name}, sample {sample_idx}, channel {channel_idx}")
+
+                            # Convert to NumPy array and transpose for matplotlib (H, W, C)
+                            img_np = projected_img.squeeze(0).permute(1, 2, 0).cpu().numpy()
+                            axes_proj[channel_idx].imshow(img_np)
+                            axes_proj[channel_idx].set_title(f'Proj. Ch. {channel_idx}')
+                            axes_proj[channel_idx].axis('off')
+
+                        plt.tight_layout()
+                        save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_single_channel_projections_combined.png")
+                        plt.savefig(save_path)
+                        plt.close(fig_proj)
+                        logger.debug(f"Saved combined single-channel projections for {layer_name}, sample {sample_idx}")
 
                     elif projection_type == "mini_decoder_full_map":
                         full_map_tensor = activation_map[sample_idx:sample_idx+1, :, :, :]
+                        if full_map_tensor.shape[1] != self.mini_decoder[0].in_channels:
+                            logger.warning(f"Mismatch: Mini-decoder expects {self.mini_decoder[0].in_channels} input channels, "
+                                           f"but layer '{layer_name}' has {full_map_tensor.shape[1]} channels. Skipping full map projection.")
+                            continue
                         projected_img = self._project_through_mini_decoder(full_map_tensor)
-                        save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_full_map.png")
-                        TF.to_pil_image(projected_img.squeeze(0)).save(save_path)
+
+                        # Convert to NumPy array and transpose for matplotlib (H, W, C)
+                        img_np = projected_img.squeeze(0).permute(1, 2, 0).cpu().numpy()
+
+                        fig_full, ax_full = plt.subplots(1, 1, figsize=(6, 6))
+                        ax_full.imshow(img_np)
+                        ax_full.set_title(f'Full Map Projection for Sample {sample_idx}')
+                        ax_full.axis('off')
+                        plt.tight_layout()
+                        save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_full_map_projection.png")
+                        plt.savefig(save_path)
+                        plt.close(fig_full)
                         logger.debug(f"Saved full map projection for {layer_name}, sample {sample_idx}")
                     else:
                         logger.warning(f"Unknown projection_type: {projection_type}. Skipping.")
@@ -339,15 +369,27 @@ class VAELogitLens:
                 try:
                     if projection_type == "mini_decoder_single_channel":
                         channels_to_project = min(self.default_num_channels, total_channels)
-                        for channel_idx in range(channels_to_project): # Loop through channels to project
+                        # This creates ONE figure for all projected channels of the current sample_idx
+                        fig_proj, axes_proj = plt.subplots(1, channels_to_project, figsize=(channels_to_project * 4, 4))
+                        if channels_to_project == 1:
+                            axes_proj = [axes_proj]
+
+                        for channel_idx in range(channels_to_project):
                             # Select a single channel and add batch and channel dimension: (1, 1, H, W)
                             single_channel_map = activation_map[sample_idx, channel_idx, :, :].unsqueeze(0).unsqueeze(0)
                             # Pass this single channel through the mini_decoder
-                            projected_img = self._project_through_mini_decoder(single_channel_map)
-                            # Save the resulting image
-                            save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_channel_{channel_idx}.png")
-                            TF.to_pil_image(projected_img.squeeze(0)).save(save_path)
-                            logger.debug(f"Saved projection for {layer_name}, sample {sample_idx}, channel {channel_idx}")
+                            img_np = self._project_through_mini_decoder(single_channel_map).squeeze(0).permute(1, 2, 0)
+                            # Plotting on the subplot of the ONE figure
+                            axes_proj[channel_idx].imshow(img_np)
+                            axes_proj[channel_idx].set_title(f'Proj. Ch. {channel_idx}')
+                            axes_proj[channel_idx].axis('off')
+
+                        plt.tight_layout()
+                        # This saves the ONE figure
+                        save_path = os.path.join(output_subdir, f"lens_sample_{sample_idx}_single_channel_projections_combined.png")
+                        plt.savefig(save_path)
+                        plt.close(fig_proj)
+                        logger.debug(f"Saved combined single-channel projections for {layer_name}, sample {sample_idx}")
 
                     elif projection_type == "mini_decoder_full_map":
                         # Select the full activation map for one sample: (1, C, H, W)
