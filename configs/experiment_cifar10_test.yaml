@@ -18,6 +18,11 @@ data:
   max_samples: 100               # Use only 100 samples for training
   batch_size: 8                  # Can use slightly larger BS for smaller images
   num_workers: 0                 # Use 0 workers for simplicity in test run
+  do_validation: true                 # <<< ENSURE THIS IS TRUE
+  validation_split_name: "test"       # <<< For CIFAR-10, "test" is the typical validation/test split
+  validation_max_samples: 50          # For quick dev run
+  validation_batch_size: 8
+
 
 # Training settings for a quick test
 training:
@@ -27,6 +32,8 @@ training:
   mixed_precision: "no"          # Use 'no' for CPU or if fp16 causes issues on small runs
   kl_weight: 1e-6                # Ensure KL weight is present if base default changes
   max_grad_norm: 1.0             # Ensure grad norm is present if base default changes
+  validation_epochs: 1           # Validate every epoch
+  validation_steps: 0            # Set to 0 or null if using epoch-based validation
 
 # Logging and Saving for quick test
 logging:

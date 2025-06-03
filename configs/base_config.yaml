@@ -19,6 +19,11 @@ data:
   max_samples: null # Set to an integer to use a subset, null for full dataset
   batch_size: 4 # Per device
   num_workers: 4
+  do_validation: true # Master switch to enable/disable validation
+  validation_split_name: "validation" # Name of the validation split in your dataset (e.g., "validation", "test")
+  validation_max_samples: 100      # Max samples for validation (null for all, or a small number for faster dev validation)
+  validation_batch_size: 8         # Batch size for validation (can be same or different from training)
+
 
 # Training parameters
 training:
@@ -34,6 +39,7 @@ training:
   mixed_precision: "fp16" # "no", "fp16", "bf16"
   max_grad_norm: 1.0 # Max gradient norm for clipping
   kl_weight: 1e-6 # Weight for the KL divergence loss term
+  validation_epochs: 1  # Perform validation every N epochs (e.g., 1 for every epoch)
 
 # Logging and Saving
 logging:
