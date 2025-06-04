@@ -10,14 +10,15 @@ model:
 
 # ---------- data ----------
 data:
-  dataset_name: imagenette
+  dataset_name: frgfm/imagenette # Standard ImageNette dataset on Hub
+  dataset_config_name: 320px
   image_column: image
   resolution: 128
   max_samples: null
   batch_size: 32
   num_workers: 4
   do_validation: true
-  validation_split_name: val
+  validation_split_name: validation
   validation_max_samples: null
   validation_batch_size: 32
 
