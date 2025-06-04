@@ -47,6 +47,7 @@ class DeadNeuronTracker:
             logger.error("DeadNeuronTracker: actual_vae_model is None.")
             return
 
+        logger.debug(f"All layer names in model: {list(actual_vae_model.named_parameters())}")
         for name, param in actual_vae_model.named_parameters():
             if not param.requires_grad:
                 continue

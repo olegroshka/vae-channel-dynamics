@@ -39,6 +39,7 @@ class InterventionHandler:
         self.nudge_factor = float(config.get("nudge_factor", 1.1))
         self.nudge_value_add = float(config.get("nudge_value_add", 0.01))
         self.max_scale_value = float(config.get("max_scale_value", 2.0))  # Cap to prevent extreme values
+        self.num_nudges_applied = 0
 
         logger.info(f"InterventionHandler initialized (strategy: {self.strategy}, model type: {type(model)})")
         if not isinstance(model, nn.Module):
@@ -101,7 +102,7 @@ class InterventionHandler:
             logger.info(f"Step {global_step}: No regions classified by RegionClassifier, skipping intervention.")
             return
 
-        num_nudges_applied = 0
+        self.num_nudges_applied = 0
 
         if self.strategy == "gentle_nudge_groupnorm_scale":
             for layer_key, data in classification_results.items():
@@ -139,12 +140,12 @@ class InterventionHandler:
                             scale_param.data[idx] = final_val
                             logger.debug(
                                 f"Nudged {param_name_scale}[{idx}] from {original_val:.4f} to {final_val:.4f} (pre-cap: {nudged_val:.4f})")
-                            num_nudges_applied += 1
+                            self.num_nudges_applied += 1
                         else:
                             logger.warning(
                                 f"Inactive index {idx} out of bounds for {param_name_scale} (size: {scale_param.data.numel()})")
-            if num_nudges_applied > 0:
-                logger.info(f"Applied '{self.strategy}' to {num_nudges_applied} channel scales at step {global_step}.")
+            if self.num_nudges_applied > 0:
+                logger.info(f"Applied '{self.strategy}' to {self.num_nudges_applied} channel scales at step {global_step}.")
 
         elif self.strategy == "reset_groupnorm_scale":
             for layer_key, data in classification_results.items():
@@ -164,9 +165,9 @@ class InterventionHandler:
                             original_val = scale_param.data[idx].item()
                             scale_param.data[idx] = 1.0  # Reset to 1.0
                             logger.debug(f"Reset {param_name_scale}[{idx}] from {original_val:.4f} to 1.0")
-                            num_nudges_applied += 1
-            if num_nudges_applied > 0:
-                logger.info(f"Applied '{self.strategy}' to {num_nudges_applied} channel scales at step {global_step}.")
+                            self.num_nudges_applied += 1
+            if self.num_nudges_applied > 0:
+                logger.info(f"Applied '{self.strategy}' to {self.num_nudges_applied} channel scales at step {global_step}.")
         else:
             logger.warning(f"Unknown intervention strategy: {self.strategy}")
 

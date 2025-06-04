@@ -45,13 +45,17 @@ saving:
 
 dead_neuron_tracking: # Config section for DeadNeuronTracker
   enabled: true
-  track_interval: 1 # More frequent for this short dev run (e.g., every 20 steps)
+  track_interval: 10 # More frequent for this short dev run (e.g., every 20 steps)
   # List of specific parameter names for which to store raw weight history (for heatmaps)
   target_layer_names_for_raw_weights:
     - "vae.encoder.conv_in.weight"
     - "vae.decoder.conv_out.weight"
     - "vae.encoder.down_blocks.0.resnets.0.norm1.weight" # A GroupNorm weight
     - "vae.encoder.down_blocks.0.resnets.0.norm1.bias"   # A GroupNorm bias
+    - "vae.decoder.up_blocks.0.resnets.0.norm1.weight" # Another GroupNorm weight
+    - "vae.decoder.up_blocks.0.resnets.0.norm1.bias"   # Another GroupNorm bias
+    - "vae.decoder.up_blocks.1.resnets.0.norm1.weight" # Another GroupNorm weight
+    - "vae.decoder.up_blocks.1.resnets.0.norm1.bias"   # Another GroupNorm bias
 
 tracking: # Config section for ActivityMonitor
   enabled: true
@@ -81,8 +85,10 @@ logit_lens:
   enabled: true
   visualization_interval: 20
   target_tracked_metrics: # These MUST match keys from ActivityMonitor's output
+    - "vae.encoder.down_blocks.0.resnets.0.norm1.output.mean_abs_activation_per_channel"
+    - "vae.encoder.down_blocks.0.resnets.0.norm1.output.full_activation_map"
     # (layer_name + "." + capture_point + "." + metric_name)
-    - "vae.encoder.down_blocks.0.resnets.0.norm1.input.full_activation_map" # Matches tracking above
+    #- "vae.encoder.down_blocks.0.resnets.0.norm1.input.full_activation_map" # Matches tracking above
     # If you added tracking for the decoder layer above, uncomment this:
     # - "vae.decoder.up_blocks.2.resnets.2.norm2.input.full_activation_map"
   layers_to_analyze_direct: []
@@ -106,6 +112,10 @@ classification:
   layers_to_classify:
     - "vae.encoder.down_blocks.0.resnets.0.norm1.output"
     - "vae.decoder.up_blocks.1.resnets.0.norm1.output"
+
+#Plotting top 10 (max 10) layers for dead neuron percentage:
+#  ['decoder.conv_norm_out.bias', 'decoder.conv_norm_out.weight', 'encoder.conv_norm_out.bias', 'encoder.conv_norm_out.weight', 'decoder.mid_block.attentions.0.group_norm.bias', 'decoder.mid_block.attentions.0.group_norm.weight',
+#   'encoder.down_blocks.0.resnets.1.norm2.bias', 'decoder.up_blocks.2.resnets.0.conv_shortcut.weight', 'encoder.down_blocks.0.resnets.1.norm2.weight', 'decoder.conv_out.weight']
 
 intervention:
   enabled: true

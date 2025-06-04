@@ -22,6 +22,7 @@ import pandas as pd
 from utils.config_utils import load_config
 from utils.logging_utils import setup_logging
 from utils.plotting_utils import DeadNeuronPlotter, ActivityPlotter
+from utils.plotting_utils import plot_dead_vs_nudge
 from data_utils import load_and_preprocess_dataset, create_dataloader
 from models.sdxl_vae_wrapper import SDXLVAEWrapper
 from tracking.monitor import ActivityMonitor
@@ -309,14 +310,22 @@ def main():
                     classification_output_for_intervention = {}
                     if classifier and accelerator.is_main_process and global_step % activity_monitor_track_interval == 0:
                         tracked_data = monitor.get_data_for_step(global_step) if monitor else {}
-                        if tracked_data: classification_output_for_intervention = classifier.classify(tracked_data,
-                                                                                                      global_step)
-                        if not classification_output_for_intervention: logger.info(
-                            f"Step {global_step}: Classifier found no inactive channels.")
+                        if tracked_data: classification_output_for_intervention = classifier.classify(tracked_data, global_step)
+                        if not classification_output_for_intervention: logger.info(f"Step {global_step}: Classifier found no inactive channels.")
                     if intervention_handler and accelerator.is_main_process and global_step % intervention_config.get(
                             "intervention_interval", 200) == 0:
                         if classification_output_for_intervention:
+                            logger.info(f"Step {global_step}: Applying intervention...")
                             intervention_handler.intervene(classification_output_for_intervention, global_step)
+                            inactive_total = sum(
+                                len(v["inactive_channel_indices"]) for v in classification_output_for_intervention.values()
+                            )
+                            wandb.log({"inactive_channels": inactive_total}, step=global_step)
+
+                            scales_nudged = intervention_handler.num_nudges_applied
+                            wandb.log({"nudged_scales": scales_nudged}, step=global_step)
+                            with open(os.path.join(output_dir, "intervention_history.csv"), "a") as fh:
+                                fh.write(f"{global_step},{inactive_total},{scales_nudged}\n")
                         else:
                             logger.info(f"Step {global_step}: Intervention due, but no regions classified.")
                     if global_step % log_interval == 0 and accelerator.is_main_process:
@@ -443,6 +452,13 @@ def main():
             logger.info(f"Activity evolution plots saved to {activity_plot_dir}")
         elif monitor and monitor_config.get("enabled", False):
             logger.warning("ActivityMonitor enabled, but CSV not found for plotting activity evolution.")
+
+        if intervention_handler and intervention_handler.num_nudges_applied > 0:
+            plot_dead_vs_nudge(
+                csv_path=os.path.join(output_dir, "intervention_history.csv"),
+                out_png=os.path.join(output_dir, "dead_vs_nudge.png"),
+                nudge_factor=intervention_handler.nudge_factor
+            )
 
         if use_wandb and wandb.run: wandb.finish()
     accelerator.end_training()

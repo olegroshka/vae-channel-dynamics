@@ -255,6 +255,45 @@ class ActivityPlotter:
         self.save_and_close(os.path.join(self.output_dir, filename.replace(" ", "_").lower()), fig)
 
 
+def plot_dead_vs_nudge(
+    csv_path: str,
+    out_png: str,
+    nudge_factor: float = 1.05,
+    bar_scale: float = 0.5,
+):
+    """
+    Overlays the inactive-channel curve with bars indicating how many
+    GroupNorm scales were nudged at each intervention step.
+
+    Parameters
+    ----------
+    csv_path      CSV written during training with columns:
+                     step,inactive_channels,nudged_scales
+    out_png       Where to save the PNG.
+    nudge_factor  The factor used in 'gentle_nudge_groupnorm_scale';
+                  shown in the title for quick reference.
+    bar_scale     Multiplier to shrink bar height so it doesn’t hide the line.
+    """
+    df = pd.read_csv(csv_path, names=["step", "inactive", "nudged"])
+
+    plt.figure(figsize=(9, 4))
+    plt.plot(df.step, df.inactive, label="# inactive channels", linewidth=2)
+    plt.bar(
+        df.step,
+        df.nudged * bar_scale,
+        width=1.0,
+        alpha=0.25,
+        label="# scales nudged ×{:.1f}".format(bar_scale),
+    )
+
+    plt.xlabel("Step")
+    plt.ylabel("Count")
+    plt.title(f"Dead-channel decay (nudge_factor = {nudge_factor})")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_png)
+    plt.close()
+
 if __name__ == '__main__':
     # ... (Keep the __main__ test block from plotting_utils_diag_v2 for testing ActivityPlotter)
     # ... (And the updated DeadNeuronPlotter test from deadneuron_py_fix_plotting)
