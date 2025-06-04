@@ -6,7 +6,7 @@ import sys
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
-from torchvision.utils import save_image  # Changed from make_grid in my previous version
+from torchvision.utils import save_image, make_grid  # Changed from make_grid in my previous version
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from tqdm.auto import tqdm
@@ -269,6 +269,16 @@ def main():
             if step == 0 and args.enable_logit_lens and logit_lens_analyzer:
                 logger.info("Running LogitLens on first batch activations...")
                 activations = prepared_vae_wrapper.get_captured_activations()  # Get from wrapper
+                for layer, activation in activations.items():
+                    for i in range(min(activation.shape[0], 10)):
+                        out = activation[i].squeeze(0)
+                        out.clamp(min=out.min(), max=out.max())
+                        out_grid = out.unsqueeze(1)
+                        grid_img = make_grid(out_grid, nrow=8, normalize=True, padding=2)
+                        output_pil = T.ToPILImage()(grid_img)
+                        output_pil.save(f"{args.output_dir}/out_{i}.png")
+                        print(f"Saved to {args.output_dir}/out_{i}.png")
+
                 if accelerator.is_local_main_process:  # LogitLens usually saves files, so main process
                     logit_lens_analyzer.run_logit_lens_with_activations(
                         global_step=0,  # Using 0 as it's eval time
