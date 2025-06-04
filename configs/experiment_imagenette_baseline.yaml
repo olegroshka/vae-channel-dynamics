@@ -1,50 +1,72 @@
-# Inherit from base config
-defaults:
-  - base_config
+# ---------- run metadata ----------
+project_name: vae-dyn
+run_name: sdxl_vae_imagenette_baseline
+output_dir: ./results
+seed: 42
 
-# Override specific settings for this ImageNette baseline run
-run_name: "sdxl_vae_baseline_imagenette_256_15e"
-project_name: "vae-dyn" # Ensure this matches your wandb project
+# ---------- model ----------
+model:
+  pretrained_vae_name: stabilityai/sdxl-vae
 
-# threshold to consider neuron/weight as "dead" (for potential analysis/classification)
-threshold: 1e-5
-mean_percentage: .01
-dead_type: "threshold" # threshold / percent_of_mean / both
-
-# Data settings for ImageNette
+# ---------- data ----------
 data:
-  dataset_name: "frgfm/imagenette" # Standard ImageNette dataset on Hub
-  dataset_config_name: "320px"     # dataset config name
-  image_column: "image"            # Correct image column for imagenette
-  resolution: 256                  # Higher resolution
-  max_samples: null                # Use the full training split
-  batch_size: 8                    # Adjust based on VRAM (might need 4 for 256px)
-  num_workers: 4                   # Increase workers if I/O is bottleneck
+  dataset_name: imagenette                 # HF dataset “imagenette/320px” by default
+  image_column: image
+  resolution: 128
+  max_samples: null                        # use the full ~14 k images
+  batch_size: 32
+  num_workers: 4
+  do_validation: true
+  validation_split_name: val
+  validation_max_samples: null
+  validation_batch_size: 32
 
-# Training settings for a more realistic run
+# ---------- training ----------
 training:
-  num_train_epochs: 15           # Train for more epochs
-  learning_rate: 2e-5            # Slightly lower LR might be stabler for fine-tuning
-  gradient_accumulation_steps: 1 # Increase if batch_size needs to be smaller due to memory
-  #mixed_precision: "fp16"        # Use fp16 for speed/memory
+  num_train_epochs: 30
+  learning_rate: 5e-5
+  gradient_accumulation_steps: 1
+  mixed_precision: "no"
   kl_weight: 1e-6
   max_grad_norm: 1.0
-  lr_warmup_steps: 250           # Slightly longer warmup for more steps
+  validation_epochs: 1
 
-# Logging and Saving
+# ---------- logging & saving ----------
 logging:
-  log_interval: 100              # Log less frequently for longer runs
-  report_to: "wandb"
-  entity: "vae-dyn"              # Your W&B entity
+  log_interval: 20
+  report_to: wandb
 saving:
-  save_interval: 1000            # Save less frequently (e.g., every 1000 steps)
-  checkpoint_dir_prefix: "chkpt"
+  save_interval_steps: 1000
+  checkpoint_dir_prefix: chkpt
 
-# Ensure tracking/intervention are disabled for baseline
+# ---------- dead-neuron weight tracking ----------
+dead_neuron_tracking:
+  enabled: true
+  track_interval: 200
+  threshold: 1e-3
+  target_layer_names_for_raw_weights:
+    - vae.encoder.conv_in.weight
+    - vae.decoder.conv_out.weight
+
+# ---------- activation monitoring ----------
 tracking:
-  enabled: false
+  enabled: true
+  track_interval: 20
+  target_layers:
+    - {name: "vae.encoder.conv_in",                       capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
+    - {name: "vae.encoder.down_blocks.0.resnets.0.norm1", capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
+    - {name: "vae.decoder.up_blocks.1.resnets.0.norm1",   capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
+
+# ---------- logit-lens ----------
+logit_lens:
+  enabled: true
+  visualization_interval: 1000
+  num_channels_to_viz: 2
+  num_batch_samples_to_viz: 1
+  run_mini_decoder_projection: true
+
+# ---------- classifier / intervention ----------
 classification:
   enabled: false
 intervention:
   enabled: false
-

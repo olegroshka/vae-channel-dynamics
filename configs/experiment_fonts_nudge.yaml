@@ -1,6 +1,6 @@
 # ---------- run metadata ----------
 project_name: vae-dyn
-run_name: sdxl_vae_cifar10_nudge
+run_name: sdxl_vae_fonts_nudge
 output_dir: ./results
 seed: 42
 
@@ -10,7 +10,7 @@ model:
 
 # ---------- data ----------
 data:
-  dataset_name: uoft-cs/cifar10
+  dataset_name: rcugarte/genfonts_data
   image_column: img
   resolution: 64
   max_samples: 50000
@@ -23,7 +23,7 @@ data:
 
 # ---------- training ----------
 training:
-  num_train_epochs: 50
+  num_train_epochs: 30
   learning_rate: 5e-5
   gradient_accumulation_steps: 1
   mixed_precision: "no"
@@ -78,10 +78,11 @@ classification:
   layers_to_classify:
     - vae.encoder.down_blocks.0.resnets.0.norm1.output
     - vae.decoder.up_blocks.1.resnets.0.norm1.output
+    - vae.decoder.conv_norm_out.output
 
 intervention:
   enabled: true
   strategy: gentle_nudge_groupnorm_scale
-  nudge_factor: 1.10
+  nudge_factor: 1.20
   max_scale_value: 1.5
-  intervention_interval: 20
+  intervention_interval: 10

@@ -1,6 +1,6 @@
 # ---------- run metadata ----------
 project_name: vae-dyn
-run_name: sdxl_vae_cifar10_nudge
+run_name: sdxl_vae_imagenette_nudge
 output_dir: ./results
 seed: 42
 
@@ -10,27 +10,26 @@ model:
 
 # ---------- data ----------
 data:
-  dataset_name: uoft-cs/cifar10
-  image_column: img
-  resolution: 64
-  max_samples: 50000
-  batch_size: 64
+  dataset_name: imagenette
+  image_column: image
+  resolution: 128
+  max_samples: null
+  batch_size: 32
   num_workers: 4
   do_validation: true
-  validation_split_name: test
-  validation_max_samples: 10000
-  validation_batch_size: 64
+  validation_split_name: val
+  validation_max_samples: null
+  validation_batch_size: 32
 
 # ---------- training ----------
 training:
-  num_train_epochs: 50
+  num_train_epochs: 30
   learning_rate: 5e-5
   gradient_accumulation_steps: 1
   mixed_precision: "no"
   kl_weight: 1e-6
   max_grad_norm: 1.0
   validation_epochs: 1
-  validation_steps: 0
 
 # ---------- logging & saving ----------
 logging:
@@ -43,7 +42,7 @@ saving:
 # ---------- dead-neuron weight tracking ----------
 dead_neuron_tracking:
   enabled: true
-  track_interval: 20
+  track_interval: 200
   threshold: 1e-3
   target_layer_names_for_raw_weights:
     - vae.encoder.conv_in.weight
@@ -54,19 +53,16 @@ tracking:
   enabled: true
   track_interval: 20
   target_layers:
-    - {name: "vae.encoder.conv_in",                             capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
-    - {name: "vae.encoder.down_blocks.0.resnets.0.norm1",       capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
-    - {name: "vae.decoder.up_blocks.1.resnets.0.norm1",         capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
+    - {name: "vae.encoder.conv_in",                       capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
+    - {name: "vae.encoder.down_blocks.0.resnets.0.norm1", capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
+    - {name: "vae.decoder.up_blocks.1.resnets.0.norm1",   capture_point: "output", metrics: ["mean_abs_activation_per_channel"]}
 
 # ---------- logit-lens ----------
 logit_lens:
   enabled: true
-  visualization_interval: 100
-  target_tracked_metrics: []
-  layers_to_analyze_direct: []
+  visualization_interval: 1000
   num_channels_to_viz: 2
   num_batch_samples_to_viz: 1
-  colormap: viridis
   run_mini_decoder_projection: true
 
 # ---------- classifier / intervention ----------
